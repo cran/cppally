@@ -1,0 +1,1067 @@
+
+---
+title: "Getting started with cppally"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with cppally}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  cache = FALSE
+)
+```
+
+```{r, include = FALSE}
+required <- c("bench", "brio", "callr", "cli", "decor",
+              "desc", "glue", "purrr", "readr", "stringr",
+              "utils", "vctrs", "withr")
+if (!all(vapply(required, requireNamespace, logical(1), quietly = TRUE))) {
+  knitr::opts_chunk$set(eval = FALSE)
+  knitr::knit_exit()
+}
+```
+
+
+Let's briefly show some of the capabilities of cppally, from its custom
+C++ scalar and vectors, to using templates and concepts.
+
+## Setup
+
+Let's start by loading cppally
+
+```{r}
+library(cppally)
+```
+
+```{r, include=FALSE}
+# Helpers to compile all examples in debug mode
+cpp_source <- function(..., code, debug = TRUE, env = parent.frame()){
+  preamble <- c("#include <cppally.hpp>", "using namespace cppally;")
+  code <- paste(c(preamble, code), collapse = "\n")
+  cppally::cpp_source(debug = debug, env = env, code = code, ...)
+}
+cpp_eval <- function(..., debug = TRUE, env = parent.frame()){
+    cppally::cpp_eval(debug = debug, env = env, ...)
+}
+
+# Helpers to source and display C++/R code
+chunk_impl <- function(x, language){
+  paste0("```", language, "\n", x, "\n```\n")
+}
+as_code_chunk <- function(x, language){
+  cat(chunk_impl(x, language))
+}
+as_cpp_chunk <- function(x){
+  as_code_chunk(x, "cpp")
+}
+
+# Pre-register named single-line expressions so they can be referenced later
+register_single_exprs <- function(exprs, env = parent.frame(), ...){
+  if (is.null(names(exprs))){
+    stop("`exprs` must be named")
+  }
+  utils::getFromNamespace("source_single_exprs", "cppally")(
+    exprs, env = env, ...
+    )
+  wrappers <- setNames(
+    lapply(seq_along(exprs), \(i) {
+      fn <- get(paste0("f", i), envir = env)
+      function() {
+        out <- fn()
+        if (out[["is_void"]]) invisible() else out$result
+      }
+    }),
+    names(exprs)
+  )
+  list2env(wrappers, envir = env)
+  invisible()
+}
+```
+
+```{r, include=FALSE}
+# Compile necessary examples in one-go
+# as it's faster when building the vignette
+
+examples <- c(
+  hello_world = '
+[[cppally::register]]
+void hello_world(){
+  print("Hello World!");
+}',
+  lgl_ops = '
+[[cppally::register]]
+r_vec<r_lgl> lgl_ops(){
+  return make_vec<r_lgl>(
+    r_true || r_false, // true
+    r_true && r_false, // false
+    r_na || r_true,    // true
+    r_na && r_true,    // NA
+    r_na && r_false,   // false
+    r_na || r_na,      // NA
+    r_na && r_na      // NA
+  );
+}
+',
+  bad_lgl_print = '
+[[cppally::register]]
+void bad_lgl_print(r_lgl condition){
+  if (condition){
+    print("true");
+  } else {
+    print("false");
+  }
+}
+',
+  good_lgl_print = '
+[[cppally::register]]
+void good_lgl_print(r_lgl condition){
+  if (is_na(condition)){
+    print("NA");
+  } else if (condition){
+    print("true");
+  } else {
+    print("false");
+  }
+}
+',
+  also_good_lgl_print = '
+[[cppally::register]]
+void also_good_lgl_print(r_lgl condition){
+  if (condition.is_true()){
+    print("true");
+  } else {
+    print("not true");
+  }
+}
+',
+  new_integer_vector = '
+// Integer vector of size n
+[[cppally::register]]
+r_vec<r_int> new_integer_vector(int n){
+  r_vec<r_int> int_vctr(n, /*fill = */ r_int(0));
+  return int_vctr;
+}
+',
+  all_vectors = '
+[[cppally::register]]
+r_vec<r_sexp> all_vectors(){
+  return make_vec<r_sexp>(
+    arg("logical") = r_vec<r_lgl>(),
+    arg("integer") = r_vec<r_int>(),
+    arg("integer64") = r_vec<r_int64>(), // Requires bit64
+    arg("double") = r_vec<r_dbl>(),
+    arg("character") = r_vec<r_str>(),
+    arg("character") = r_vec<r_str_view>(),
+    arg("raw") = r_vec<r_raw>(),
+    arg("date") = r_vec<r_date>(),
+    arg("date-time") = r_vec<r_psxct>(),
+    arg("list") = r_vec<r_sexp>()
+  );
+}
+',
+  cpp_abs = '
+template <RMathType T>
+[[cppally::register]]
+T cpp_abs(T x){
+  if (is_na(x)) return na<T>();
+
+  if (x < 0){
+    return -x;
+  } else {
+    return x;
+  }
+}
+',
+  scalar_default = '
+// Return the default constructor result of RScalar types
+
+template <RScalar T>
+[[cppally::register]]
+T scalar_default(T ptype){
+	return T();
+}
+',
+  double_to_int = '
+[[cppally::register]]
+r_int double_to_int(r_dbl x){
+  return as<r_int>(x);
+}
+',
+  to_int_vec = '
+[[cppally::register]]
+r_vec<r_int> to_int_vec(r_vec<r_dbl> x){
+  return as<r_vec<r_int>>(x);
+}
+',
+  coercions = '
+[[cppally::register]]
+r_vec<r_sexp> coercions(){
+    r_dbl a(4.2);
+    r_vec<r_dbl> b = make_vec<r_dbl>(2.5);
+    return make_vec<r_sexp>(
+        as<r_vec<r_int>>(a),
+        as<r_int>(a),
+        as<r_int>(b),
+        as<r_dbl>(b)
+    );
+}
+',
+  str_concatenate = '
+[[cppally::register]]
+r_str str_concatenate(r_str x, r_str y, r_str sep){
+  std::string left = std::string(x.cpp_str());
+  std::string right = std::string(y.cpp_str());
+  std::string middle = std::string(sep.cpp_str());
+  std::string combined = left + middle + right;
+  return r_str(combined.c_str());
+}
+',
+  new_list = '
+using list = r_vec<r_sexp>;
+
+[[cppally::register]]
+list new_list(int n){
+  return list(n);
+}
+',
+  resize_all = '
+[[cppally::register]]
+r_vec<r_sexp> resize_all(r_vec<r_sexp> x, r_size_t n){
+    r_size_t list_length = x.length();
+    for (r_size_t i = 0; i < list_length; ++i){
+        visit_vector(x.view(i), [&](auto vec) {
+            x.set(i, vec.resize(n));
+        });
+    }
+    return x;
+}
+',
+  resize_all2 = '
+[[cppally::register]]
+r_vec<r_sexp> resize_all2(r_vec<r_sexp> x, r_size_t n){
+    r_size_t list_length = x.length();
+    for (r_size_t i = 0; i < list_length; ++i){
+        visit_sexp(x.view(i), [&](auto vec) {
+          using vec_t = decltype(vec); // type of object `vec`
+          if constexpr (RVector<vec_t>){
+            x.set(i, vec.resize(n));
+          } else {
+            abort("Cannot resize a non-vector");
+          }
+        });
+    }
+    return x;
+}
+',
+  new_factor = '
+[[cppally::register]]
+r_factors new_factor(r_vec<r_str> x){
+	return r_factors(x);
+}
+',
+  factor_codes = '
+static_assert(!RVector<r_factors>);
+
+[[cppally::register]]
+r_vec<r_int> factor_codes(r_factors x){
+	return x.codes();
+}
+',
+  list_as_df = '
+[[cppally::register]]
+r_vec<r_sexp> list_as_df(r_vec<r_sexp> x){
+
+  r_size_t n = x.length();
+
+  if (n_unique(x.lengths()) > 1){
+    abort("List must have vectors of equal length to be converted to a data frame");
+  }
+
+  r_vec<r_str> names(attr::get_attr(x, cached_sym<"names">()));
+  if (names.is_null()){
+     abort("list must have names to be converted to a data frame");
+  }
+
+  r_vec<r_sexp> out = shallow_copy(x);
+
+  int nrow = 0;
+  r_vec<r_int> row_names;
+  if (n > 0){
+    nrow = out.view(0).length();
+    row_names = make_vec<r_int>(na<r_int>(), -nrow);
+  }
+
+  attr::set_attr(out, cached_sym<"row.names">(), row_names);
+  attr::set_attr(out, cached_sym<"class">(), make_vec<r_str>("data.frame"));
+  return out;
+}
+'
+)
+
+# Benchmarks need debug = FALSE
+benchmark_examples <- c(
+  cpp_n_unique = '
+template <RVector T>
+[[cppally::register]]
+r_int cpp_n_unique(T x){
+  return as<r_int>(n_unique(x));
+}
+',
+  primitive_sum = '
+[[cppally::register]]
+double primitive_sum(const r_vec<r_dbl>& x){
+
+  // r_vec<T>::data_type always returns typename T
+  using data_t = typename std::remove_cvref_t<decltype(x)>::data_type;
+
+  using primitive_t = unwrap_t<data_t>;
+  primitive_t *p_x = x.data();
+
+  r_size_t n = x.length();
+  double sum = 0;
+
+  OMP_SIMD_REDUCTION1(+:sum)
+  for (r_size_t i = 0; i < n; ++i){
+    sum += p_x[i];
+  }
+  return sum;
+}
+'
+)
+
+cpp_source(code = paste(examples, collapse = "\n"), debug = TRUE)
+cpp_source(code = paste(benchmark_examples, collapse = "\n"), debug = FALSE)
+
+# Single-line expressions, pre-registered as R functions of the same name.
+# Each can be invoked later as e.g. `r_true_val()` to get the evaluated result.
+single_exprs <- c(
+  r_true_val          = 'r_true',
+  r_false_val         = 'r_false',
+  r_na_val            = 'r_na',
+  make_vec_dbl        = 'make_vec<r_dbl>(1, 1.5, 2, na<r_dbl>())',
+  make_vec_dbl_named  = '
+make_vec<r_dbl>(
+    arg("first") = 1,
+    arg("second") = 1.5,
+    arg("third") = 2,
+    arg("last") = na<r_dbl>()
+  )
+',
+  make_vec_sexp       = 'make_vec<r_sexp>(1, 2, 3)',
+  r_str_hello         = 'r_str("hello")',
+  r_str_hello_c_str   = 'r_str("hello").c_str()',
+  r_sym_new           = 'r_sym("new_symbol")',
+  r_sym_from_str      = 'r_sym(r_str("symbol_from_string"))',
+  cached_str_demo     = 'cached_str<"cached_string">()',
+  cached_sym_demo     = 'cached_sym<"cached_symbol">()'
+)
+
+register_single_exprs(single_exprs, debug = TRUE)
+```
+
+
+## Registering R functions
+
+To make a C++ function available to R we use the `[[cppally::register]]` tag.
+
+``` cpp
+#include <cppally.hpp>
+using namespace cppally;
+
+[[cppally::register]]
+void hello_world(){
+  print("Hello World!");
+}
+```
+
+After tagging our functions we want to make them available to R. To do that we have a few routes.
+
+### Registering C++ functions outside of a package context
+
+After writing our hello world program in foo.cpp we can use `cpp_source()` to compile and register the function to R.
+
+```r
+cpp_source(file = "src/foo.cpp")
+```
+
+Now the function is available in R
+
+```{r}
+hello_world()
+```
+
+Similarly we can use the helper `cpp_eval` to run simple expressions and return
+the result without needing to include cppally.hpp and register the function.
+
+```{r}
+cpp_eval('print("Hello World Again!")')
+```
+
+**Note** - For the rest of the examples it is assumed that the following code
+is always included beforehand.
+
+```cpp
+#include <cppally.hpp>
+using namespace cppally;
+```
+
+### Registering C++ functions inside a cppally-linked package
+
+Since cppally is header-only, we can include the headers directly into our own package.
+
+### General steps to using cppally in a package
+
+1. Create package (if you haven't already done so) using `usethis::create_tidy_package()`
+2. Run `cppally::use_cppally()`
+3. Run `cppally::document()`
+
+This will automatically add the necessary package content needed to start working with cppally. For continuous development, use `cppally::load_all()` to compile and register cppally tagged functions, including our hello world function.
+
+**Note:** We aim to integrate cppally registration into the `devtools` framework for ease-of-use.
+
+## C++ types
+
+cppally offers a rich set of R types in C++ that are NA-aware. This means that common arithmetic and logical operations will account for `NA` in a similar fashion to R.
+
+### logical scalar - `r_lgl`
+
+cppally's scalar version of `logical`, `r_lgl` can represent true, false or NA.
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(paste(
+  single_exprs[["r_true_val"]],
+  single_exprs[["r_false_val"]],
+  single_exprs[["r_na_val"]],
+  sep = "\n"
+))
+```
+
+```{r, echo=FALSE}
+r_true_val()
+r_false_val()
+r_na_val()
+```
+
+Logical operators work just like in R
+
+```{r, echo=FALSE, comment="", results='asis'}
+as_cpp_chunk(examples[["lgl_ops"]])
+```
+
+```{r}
+lgl_ops()
+```
+
+**Using `r_lgl`** in if-statements
+
+For type-safety reasons `r_lgl` cannot be implicitly converted to `bool` except in if-statements where an error is thrown if the value is `NA`.
+
+**DON'T** do this:
+
+```{r, echo=FALSE, comment="", results='asis'}
+as_cpp_chunk(examples[["bad_lgl_print"]])
+```
+
+```{r, error=TRUE}
+bad_lgl_print(TRUE)
+bad_lgl_print(FALSE)
+bad_lgl_print(NA) # Can't implicitly convert NA to bool
+```
+
+**DO** this:
+
+```{r, echo=FALSE, comment="", results='asis'}
+as_cpp_chunk(examples[["good_lgl_print"]])
+```
+
+```{r}
+good_lgl_print(TRUE)
+good_lgl_print(FALSE)
+good_lgl_print(NA) # NA is handled explicitly so no issues
+```
+
+We can also use `r_lgl` members `is_true()` and `is_false()` which return `bool` and
+are equivalent to R's `isTRUE()` and `isFALSE()`
+
+```{r, echo=FALSE, comment="", results='asis'}
+as_cpp_chunk(examples[["also_good_lgl_print"]])
+```
+
+```{r}
+also_good_lgl_print(TRUE)
+also_good_lgl_print(FALSE)
+also_good_lgl_print(NA) # Falls into 'not true' branch here as expected
+```
+
+
+All cppally scalar types are implemented as structs that contain the underlying C/C++ types as well as other member functions.
+
+| cppally type    | Description                 | Implicitly converts to           |
+| :------------ | --------------------------- | :------------------------------- |
+| `r_lgl`       | Scalar logical              | `bool` **only** in if-statements |
+| `r_int`       | Scalar integer              | `int`                            |
+| `r_int64`     | Scalar 64-bit integer       | `int64_t`                        |
+| `r_dbl`       | Scalar double               | `double`                         |
+| `r_str`       | Scalar string               | `SEXP`                           |
+| `r_cplx`      | Scalar double complex       | `std::complex<double>`           |
+| `r_raw`       | Scalar raw                  | `unsigned char`                  |
+| `r_sym`       | Symbol                      | `SEXP`                           |
+| `r_date` [^1] | Scalar date                 | `double`                         |
+| `r_psxct`     | Scalar date-time            | `double`                         |
+| `r_sexp`      | Generic R object (SEXP)[^2] | `SEXP`                           |
+
+[^1]: Unlike `r_str` which is composite and holds an `r_sexp` member, `r_date` and `r_psxct` instead inherit directly from `r_dbl`. This means that they can implicitly convert to `r_dbl`
+
+[^2]: `r_sexp` represents a generic R object which can include cppally vectors. We will explain how to disambiguate `r_sexp` later which is most useful when working with lists and data frames
+
+`NA` values can be accessed via the template function `na<T>`
+
+### C++ NA values and their R C API equivalents
+
+| Type                     | Value                 | R C API Value  | constexpr?[^3] |
+| ------------------------ | --------------------- | -------------- | -------------- |
+| `r_lgl`                  | `na<r_lgl>()`/`r_na`  | `NA_LOGICAL`   | Yes            |
+| `r_int`                  | `na<r_int>()`         | `NA_INTEGER`   | Yes            |
+| `r_int64`                | `na<r_int64>()`       | Not applicable | Yes            |
+| `r_dbl`                  | `na<r_dbl>()`         | `NA_REAL`      | Yes            |
+| `r_str`                  | `na<r_str>()`         | `NA_STRING`    | No             |
+| `r_cplx`                 | `na<r_cplx>()`        | Not applicable | Yes            |
+| `r_sym`                  | Not applicable        | Not applicable | No             |
+| `r_sexp`[^4]<br><br><br> | `na<r_sexp>`/`r_null` | `R_NilValue`   | No             |
+
+[^3]: In C++ constexpr is used as a keyword to declare that it's possible to evaluate values at compile-time, meaning they are known before any code is run by the user. Since `r_na` internally is the largest possible `int` which does not change and is known a priori, it is therefore a compile-time constant.
+[^4]: Having an `NA` sentinel for `r_sexp` is very useful when writing templates involving vectors. For this reason the `NA` sentinel is `r_null`. This doesn't mean `is_na(r_null)` is true, and is intentionally not true because it is not a scalar and therefore cannot be `NA`.  As `r_null` represents the absence of a tangible R object, it can be thought of as a zero-length object and since all `NA` values are represented as length-1 vectors (in R), `is_na(r_null)` should not return true.
+
+
+## Vectors
+
+cppally vectors are templated and can be thought of as containers of scalar
+elements like `r_int`, `r_dbl`, etc.
+
+We can create vectors like so
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["new_integer_vector"]])
+```
+
+```{r}
+new_integer_vector(3)
+```
+
+### inline vectors
+
+To create inline vectors, use `make_vec<>`
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["make_vec_dbl"]])
+```
+
+```{r, echo=FALSE}
+make_vec_dbl()
+```
+
+We can add names on the fly with `arg()`
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["make_vec_dbl_named"]])
+```
+
+```{r, echo=FALSE}
+make_vec_dbl_named()
+```
+
+In R a list is a generic vector, so cppally defines lists as `r_vec<r_sexp>`, a vector of the generic type `r_sexp`.
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["make_vec_sexp"]])
+```
+
+```{r, echo=FALSE}
+make_vec_sexp()
+```
+
+A list of all cppally vectors of length 0
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["all_vectors"]])
+```
+
+```{r}
+all_vectors()
+```
+
+## Concepts and Templates
+
+One of the most powerful features of C++20 are concepts. These allow users to write human-readable templates and constraints.
+
+When writing your own templates, it is highly encouraged to place them in headers
+for cppally registration to work correctly.
+
+Let's practice by creating an absolute function in C++ using templates
+and the `RMathType` concept.
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["cpp_abs"]])
+```
+
+Works correctly for doubles
+
+```{r}
+cpp_abs(-5)
+cpp_abs(0)
+cpp_abs(100)
+cpp_abs(NA_real_)
+```
+
+It also works for integers
+
+```{r}
+cpp_abs(-3L)
+cpp_abs(NA_integer_)
+```
+
+The top-line `template <RMathType T>` declares a template that encapsulates `T`, an `RMathType` - a concept that contains `r_lgl`, `r_int`, `r_int64` and `r_dbl`
+
+If x is NA then we immediately also return NA via `na<T>()` which is a templated
+function that returns NA of the input type `T`.
+
+Without templates, writing C++ functions that accept flexible inputs
+is quite difficult because C++ is a statically-typed language. Usually one would
+write one absolute function for doubles and another for integers whereas here we
+don't have to.
+
+### Notes on templates
+
+To correctly register templates, the '[[cppally::register]]' tag must
+always go above the function name.
+
+```cpp
+template <typename T>
+[[cppally::register]] // <--- Here
+T foo(T x){
+  return x;
+}
+```
+
+Explicit instantiation (from R) is unfortunately not possible and template
+types must be deduced from supplied arguments.
+
+```cpp
+template <typename T>
+[[cppally::register]]
+T foo(){
+	return T();
+}
+```
+
+You may get a cryptic compiler error like this
+
+```cpp
+error: no matching function for call to 'foo()'
+[]<typename T>() -> decltype(cpp_to_sexp(::foo())) {
+```
+
+along with an equally cryptic note
+
+```cpp
+note:   couldn't deduce template parameter 'T'
+[]<typename T>() -> decltype(cpp_to_sexp(::foo())) {
+```
+
+This is because the parameter `T` cannot be automatically deduced from any
+of the function inputs.
+Even though these kinds of templates can be written with cppally,
+they cannot be exported to R.
+
+An obvious and somewhat ugly workaround is to include a prototype argument that
+allows the template parameter to be deduced from.
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["scalar_default"]])
+```
+
+
+```{r}
+scalar_default(integer(1)) # Default is 0L
+scalar_default(numeric(1)) # Default is 0.0
+scalar_default(character(1)) # Default is ""
+```
+
+
+Exporting variadic templates are also not supported. The best alternative is
+to use lists (`r_vec<r_sexp>`).
+
+In the above example we used the `RScalar` concept which includes
+all cppally scalar types (excluding `r_sexp`).
+For a list of all cppally concepts, please see the **Annex**
+
+## Coercion
+
+To coerce from one scalar to another we can use `as<T>`
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["double_to_int"]])
+```
+
+```{r}
+double_to_int(pi)
+double_to_int(NA_real_)
+```
+
+We can also coerce from one vector type to another
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["to_int_vec"]])
+```
+
+```{r}
+to_int_vec(c(0, 1.5, NA))
+```
+
+Since `as<T>` is extremely flexible, we can also coerce
+from a scalar to a vector or vice versa
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["coercions"]])
+```
+
+```{r}
+coercions()
+```
+
+## Strings
+
+cppally provides the useful string type `r_str`
+
+We can create R strings easily
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["r_str_hello"]])
+```
+
+```{r, echo=FALSE}
+r_str_hello()
+```
+
+To get a C or C++ string, use the members `c_str()` and `cpp_str()` respectively
+
+C string via `c_str()`
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["r_str_hello_c_str"]])
+```
+
+```{r, echo=FALSE}
+r_str_hello_c_str()
+```
+
+C++ string_view via `cpp_str()`
+
+This can be converted into a std::string via its constructor
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["str_concatenate"]])
+```
+
+```{r}
+str_concatenate("hello", "how are you?", sep = ", ")
+```
+
+## Symbols
+
+Symbols have class `r_sym` and can be created directly from a string literal
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["r_sym_new"]])
+```
+
+```{r, echo=FALSE}
+r_sym_new()
+```
+
+Or from a cppally string
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["r_sym_from_str"]])
+```
+
+```{r, echo=FALSE}
+r_sym_from_str()
+```
+
+## Cached strings & symbols
+
+cppally provides an efficient caching strategy for constructing cppally
+strings/symbols from string literals
+
+`cached_str<>`
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["cached_str_demo"]])
+```
+
+```{r, echo=FALSE}
+cached_str_demo()
+```
+
+This initialises the string once, caches it (to R's CHARSXP pool), and efficiently
+re-uses the cached string for each subsequent call.
+
+We can cache symbols in a similar way
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(single_exprs[["cached_sym_demo"]])
+```
+
+```{r, echo=FALSE}
+cached_sym_demo()
+```
+
+## Lists
+
+`r_sexp` is generally interpreted as an "element of a list" since lists are defined as `r_vec<r_sexp>`, a vector that holds generic `r_sexp` elements.
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["new_list"]])
+```
+
+```{r}
+new_list(0)
+new_list(3)
+```
+
+The problem with a class like `r_sexp` is that it is by design
+generic and therefore difficult to work with in C++.
+To disambiguate the actual type we can use `visit_vector()` or `visit_sexp()`
+via a C++ lambda.
+
+**Example:** using `visit_vector()` to resize every vector to length n in-place
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["resize_all"]])
+```
+
+```{r}
+# Resize to size 1
+resize_all(list(1:5, letters), n = 1)
+```
+
+When we pass a non-vector to `visit_vector`, it aborts and
+explains that the input must be a vector
+
+```{r, error=TRUE}
+resize_all(list(mean_fn = mean), 1)
+```
+
+
+**visit_sexp**
+
+This allows us to visit more types than just vectors, including factors, symbols and (soon to be implemented) data frames. When an object's type can't be deduced into a distinct type, `r_sexp` is returned.
+
+**Example:** Same example as above but with `visit_sexp()`
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["resize_all2"]])
+```
+
+```{r}
+# Resize to size 1
+resize_all2(list(1:5, letters), n = 1)
+```
+
+```{r, error=TRUE}
+resize_all2(list(mean_fn = mean), n = 1)
+```
+
+
+## Factors
+
+We can create a factor via `r_factors()`
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["new_factor"]])
+```
+
+```{r}
+new_factor(letters)
+```
+
+In cppally, like R, factors are not vectors and therefore do not satisfy the RVector concept. To access the underlying integer codes vector, use the public `codes()` member function
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["factor_codes"]])
+```
+
+```{r}
+letter_fct <- new_factor(letters)
+
+letter_fct |>
+    factor_codes()
+```
+
+
+## Attributes
+
+Attributes can be manipulated via functions defined in the attr namespace.
+
+**Example:** Converting a list of samples to a data frame
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(examples[["list_as_df"]])
+```
+
+
+```{r}
+set.seed(42)
+norm_samples <- lapply(1:5, \(x) rnorm(10, mean = x))
+names(norm_samples) <- paste0("sample_", 1:5)
+list_as_df(norm_samples)
+```
+
+
+More useful attribute helpers
+
+- `get_attrs()` - Returns a list of attributes (possibly `r_vec<r_sexp>(r_null)`)
+- `set_attrs()` - Sets attributes to ones specified. Note: replaces any current attributes
+- `clear_attrs()` - Removes all attributes
+- `set_attr()` - Set a single attribute
+- `get_attr()` - Get a single attribute
+- `inherits1()` - Does object inherit class?
+- `inherits_any()` - Does object inherit at least one of the specified classes?
+- `inherits_all()` - Does object inherit all of the specified classes?
+- `modify_attrs()` - Modifies current attributes but doesn't remove any existing ones
+
+## Sugar functions
+
+cppally also offers many useful and high-performance common functions in cppally/sugar
+
+**Example:** `n_unique()` - fast calculation of number of unique values.
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(benchmark_examples[["cpp_n_unique"]])
+```
+
+```{r}
+library(bench)
+x <- sample(1:100, 10^5, replace = TRUE)
+mark(
+  base_n_unique = length(unique(x)),
+  cppally_n_unique = cpp_n_unique(x)
+)
+```
+
+
+More useful sugar functions
+
+- `unique()` - Like R's `unique()` but with a `sort` argument to return sorted unique values
+
+- `identical()` - A very fast identical function that works for scalars and vectors. Use this for exact equality of any scalar or vector.
+
+- `match()` - Like R's match, but also faster
+
+- `sequences()` - Like `sequence()` but it returns a list of sequences and also works with doubles.
+
+- `order()` - Like base R's order but it internally uses a hybrid approach of ska sort, count sorting, quick sort, etc.
+
+- `make_groups()` - An advanced function that returns a struct containing group IDs and number of groups (i.e number of unique group IDs). The `groups` struct contains the following members:
+	- r_vec<r_int> ids - The cached group IDs
+	- int n_groups - Number of unique groups
+	- bool ordered - Do the group IDs specify a sorting order, or are they by order-of-first-appearance?
+	- bool sorted - Are the group IDs sorted? (This can also be true for order-of-first-appearance IDs)
+	- r_vec<r_int> start() - Returns an r_vec<r_int>(n_groups) vector of start locations of each unique group, signifying the location in the data at which each group initially appeared
+	- r_vec<r_int> counts() - Returns an r_vec<r_int>(n_groups) vector of frequency counts of each unique group
+	- r_vec<r_int> order() - Returns an r_vec<r_int>(ids.length()) order vector. This is a 0-indexed permutation vector that can be used to return sorted group IDs
+
+- `recycle()` - Recycles supplied vectors to common length
+
+- `r_vec<T>::subset()` - Fast subsetting of vectors
+
+**Scalar math functions**
+
+There is a rich suite of math functions. Some examples include `min()`, `max()`, `round()`, `log()`, `floor()`, `ceiling()` and more.
+
+**Stats sugar functions**
+
+Some statistical summary functions that are all very highly optimised for speed
+
+- `sum()` - Sum of values
+- `range()` - Min and max range of values
+- `abs()` - Computes absolute values (there is also a scalar version)
+- `var()` and `sd()` - Variance and standard deviation
+- `gcd()` - Greatest common divisor
+- `lcm()` - Lowest common multiple
+
+## Annex
+
+### Symbols in R-registered templates
+
+`r_sym` is unsupported in templates when it's part of a template argument but is supported when the argument is explicitly an `r_sym`.
+
+```cpp
+[[cppally::register]]
+r_str symbol_to_string(r_sym x){
+	return as<r_str>(x);
+}
+```
+
+```r
+hello_world_symbol <- as.symbol("hello world!")
+hello_world_symbol
+`hello world!`
+symbol_to_string(hello_world_symbol)
+[1] "hello world!"
+```
+
+### All core cppally concepts
+
+- RIntegerType - Includes `r_lgl`, `r_int`, `r_int64`
+
+- RMathType - Includes `r_lgl`, `r_int`, `r_int64` and `r_dbl`
+
+- RStringType - Includes `r_str` and `r_str_view`
+
+- RScalar - Includes all cppally specific scalar types
+
+- RVal - Includes anything a cppally vector (`r_vec<>`) can contain: RScalar +`r_sexp`
+
+- RVector - Includes `r_vec<T>` where `T` is an RVal
+- RTimeType - Includes `r_date` and `r_psxct`
+- RNumericType - Numeric types, including RMathType and RTimeType
+- RSortableType - Includes RNumericType and RStringType (strings can also be sorted)
+- RAtomicVector - A vector that contains RScalar elements
+- CppallyType - Any R type defined by R, including RVal, RVector, RFactor, RDataFrame, RSymbol
+- CppType - Anything that is not an CppallyType
+- CastableToRScalar - Anything that can be constructed or cast into an RScalar (which also includes RScalar)
+- CastableToRVal (**questioning**) - Anything that can be constructed or cast into an RVal. This is more complicated as it includes vectors, factors and data frames which can be cast to `r_sexp`
+
+Other useful type traits
+
+- `unwrap_t` - Returns the underlying unwrapped type
+- `as_r_scalar_t` - Returns the equivalent RScalar type
+- `as_r_val_t` - Returns the equivalent RVal type
+- `common_r_t` - Returns the common RVal type between 2 types. Generally this is a hierarchy where the common type is the type that both values can be coerced to without complete loss of information
+
+
+### Accessing the underlying types and values
+
+While it is generally recommended not to access the underlying objects, you can do so with `unwrap()` which returns the underlying C/C++ value. For example, `unwrap(r_int(5))` will return an `int` of value `5`.
+
+To access the underlying type, use `unwrap_t<>` which always aligns with `unwrap()`
+
+The main reason for wanting to access underlying values would likely be optimisation and so `unwrap()` and `unwrap_t` allow this to be done consistently.
+
+**Example:** Summing a double vector using `r_vec<T>::data()` member
+
+```{r, echo=FALSE, results = 'asis'}
+as_cpp_chunk(benchmark_examples[["primitive_sum"]])
+```
+
+```{r}
+x <- rnorm(10^5)
+primitive_sum(x)
+```
