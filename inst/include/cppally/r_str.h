@@ -27,6 +27,9 @@ struct r_str {
   explicit r_str(r_sexp x) : value(std::move(x)) {
     internal::check_valid_construction<r_str>(value);
   }
+  explicit r_str(SEXP x, internal::no_checks_tag) : value{x} {}
+  explicit r_str(SEXP x, internal::view_tag, internal::no_checks_tag) : value(x, internal::view_tag{}) {}
+
   explicit r_str(const char *x) : value(Rf_mkCharCE(x, CE_UTF8)) {}
   // Implicit r_str -> SEXP 
   operator SEXP() const noexcept { return value; }
@@ -38,13 +41,13 @@ struct r_str {
     return CHAR(value);
   }
 
-  std::string_view cpp_str() const {
+  std::string_view cpp_str() const noexcept {
     return std::string_view{c_str()};
   }
   
   // Explicit conversions
   explicit operator const char*() const noexcept { return c_str(); }
-  explicit operator std::string_view() const { return cpp_str(); }
+  explicit operator std::string_view() const noexcept { return cpp_str(); }
 };
 
 inline r_str r_sexp::address() const {
@@ -67,30 +70,43 @@ struct r_str_view {
   explicit r_str_view(SEXP x, internal::view_tag) : value(x) {
     internal::check_valid_construction<r_str_view>(value);
   }
+  explicit r_str_view(SEXP x, internal::no_checks_tag) : value{x} {}
+  explicit r_str_view(SEXP x, internal::view_tag, internal::no_checks_tag) : value(x) {}
   // explicit r_str_view(const char *x) : value(Rf_mkCharCE(x, CE_UTF8)) {}
   // Implicit r_str_view -> SEXP
   operator SEXP() const noexcept { return value; }
   
   // Implicit r_str -> r_str_view
-  r_str_view(const r_str& x) : value(static_cast<SEXP>(x)) {}
+  r_str_view(const r_str& x) noexcept : value(static_cast<SEXP>(x)) {}
   
-  const char* c_str() const { return CHAR(value); }
+  const char* c_str() const noexcept { return CHAR(value); }
   std::string_view cpp_str() const noexcept { return std::string_view{c_str()}; }
 
 
   // Explicit conversions
-  explicit operator const char*() const { return c_str(); }
-  explicit operator std::string_view() const { return cpp_str(); }
+  explicit operator const char*() const noexcept { return c_str(); }
+  explicit operator std::string_view() const noexcept { return cpp_str(); }
 };
 
 inline r_str::r_str(r_str_view x) : value(static_cast<SEXP>(x)) {}
 
 // NA
-inline const r_str_view na_str = r_str_view(NA_STRING);
+inline const r_str na_str = r_str(NA_STRING);
 
 template <internal::name T>
 inline r_str cached_str() {
     return r_str(internal::lazy_str_impl<T>());
+}
+
+// Memory address
+inline r_str address(SEXP x) {
+    return r_sexp(x, internal::view_tag{}).address();
+}
+
+namespace internal {
+inline r_str_view c_str_to_r_str_view(const char* x){
+  return r_str_view(Rf_mkCharCE(x, CE_UTF8));
+}
 }
 
 }

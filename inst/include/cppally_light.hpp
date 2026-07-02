@@ -15,13 +15,16 @@
 #include <cppally/r_env.h>
 #include <cppally/r_limits.h>
 #include <cppally/r_nas.h>
-#include <cppally/r_scalar_methods.h>
+#include <cppally/r_scalar_ops.h>
 #include <cppally/r_vec.h>
 #include <cppally/r_attrs.h>
 #include <cppally/r_factor.h>
 #include <cppally/r_df.h>
 #include <cppally/r_visit.h>
+#include <cppally/r_length.h>
+#include <cppally/r_copy.h>
 #include <cppally/r_list_helpers.h>
 #include <cppally/r_coerce.h>
+#include <cppally/r_df_methods.h>
 
 #endif

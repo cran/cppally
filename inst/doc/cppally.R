@@ -117,6 +117,44 @@ void also_good_lgl_print(r_lgl condition){
   }
 }
 ',
+cppally_equality = '
+[[cppally::register]]
+void cppally_equality(){
+
+  r_int x = na<r_int>();
+  r_int y = na<r_int>();
+  
+  r_lgl x_equal_to_y = x == y;
+  bool x_identical_to_y = identical(x, y);
+  
+  // NA so not printed
+  if ( x_equal_to_y.is_true() ){
+    print("x is equal to y\\n");
+  }
+  
+  // NA so not printed
+  if ( x_equal_to_y.is_false() ){
+    print("x is not equal to y\\n");
+  }
+  
+  // NA so printed
+  if (is_na(x_equal_to_y)){
+    print("`x == y` produces `NA`\\n");
+  }
+  
+  // Both na<r_int>() therefore they are identical to each other
+  if (x_identical_to_y){
+    print("x is identical to y\\n");
+  }
+}
+',
+cppally_identical = '
+template <typename T, typename U>
+[[cppally::register]]
+bool cpp_identical(T x, U y){
+  return identical(x, y);
+}
+',
   new_integer_vector = '
 // Integer vector of size n
 [[cppally::register]]
@@ -142,13 +180,34 @@ r_vec<r_sexp> all_vectors(){
   );
 }
 ',
+cppally_math = '
+[[cppally::register]]
+r_vector<r_dbl> cppally_math(r_dbl x){
+    return make_vec<r_dbl>(
+        arg("abs")          = abs(x),
+        arg("floor")        = floor(x),
+        arg("ceiling")      = ceiling(x),
+        arg("trunc")        = trunc(x),
+        arg("round")        = round(x),
+        arg("signif")       = signif(x, 3),
+        arg("sign")         = sign(x),
+        arg("min")          = min(0, x),
+        arg("max")          = max(0, x),
+        arg("sqrt")         = sqrt(x),
+        arg("pow")          = pow(x, 2),
+        arg("exp")          = exp(x),
+        arg("log")          = log(x),
+        arg("log_base")     = log(x, 2),
+        arg("log10")        = log10(x)
+    );
+}', 
   cpp_abs = '
 template <RMathType T>
 [[cppally::register]]
 T cpp_abs(T x){
-  if (is_na(x)) return na<T>();
-
-  if (x < 0){
+  if (is_na(x)){
+    return na<T>();
+  } else if (x < 0){
     return -x;
   } else {
     return x;
@@ -189,6 +248,14 @@ r_vec<r_sexp> coercions(){
     );
 }
 ',
+to_from_cpp_vec = '
+[[cppally::register]]
+r_vector<r_int> cpp_vectors_example(r_vector<r_int> x){
+  std::vector x_cpp = as<std::vector<r_int>>(x);
+  x_cpp.push_back(r_int(42));
+  return as<r_vector<r_int>>(x_cpp);
+}
+',
   str_concatenate = '
 [[cppally::register]]
 r_str str_concatenate(r_str x, r_str y, r_str sep){
@@ -212,25 +279,8 @@ list new_list(int n){
 r_vec<r_sexp> resize_all(r_vec<r_sexp> x, r_size_t n){
     r_size_t list_length = x.length();
     for (r_size_t i = 0; i < list_length; ++i){
-        visit_vector(x.view(i), [&](auto vec) {
+        r_sexp_visit(x.view(i), [&]<RVector T>(T vec) {
             x.set(i, vec.resize(n));
-        });
-    }
-    return x;
-}
-',
-  resize_all2 = '
-[[cppally::register]]
-r_vec<r_sexp> resize_all2(r_vec<r_sexp> x, r_size_t n){
-    r_size_t list_length = x.length();
-    for (r_size_t i = 0; i < list_length; ++i){
-        visit_sexp(x.view(i), [&](auto vec) {
-          using vec_t = decltype(vec); // type of object `vec`
-          if constexpr (RVector<vec_t>){
-            x.set(i, vec.resize(n));
-          } else {
-            abort("Cannot resize a non-vector");
-          }
         });
     }
     return x;
@@ -250,33 +300,67 @@ r_vec<r_int> factor_codes(r_factors x){
 	return x.codes();
 }
 ',
-  list_as_df = '
+find_empty_string = '
 [[cppally::register]]
-r_vec<r_sexp> list_as_df(r_vec<r_sexp> x){
-
-  r_size_t n = x.length();
-
-  if (n_unique(x.lengths()) > 1){
-    abort("List must have vectors of equal length to be converted to a data frame");
-  }
-
-  r_vec<r_str> names(attr::get_attr(x, cached_sym<"names">()));
-  if (names.is_null()){
-     abort("list must have names to be converted to a data frame");
-  }
-
-  r_vec<r_sexp> out = shallow_copy(x);
-
-  int nrow = 0;
-  r_vec<r_int> row_names;
-  if (n > 0){
-    nrow = out.view(0).length();
-    row_names = make_vec<r_int>(na<r_int>(), -nrow);
-  }
-
-  attr::set_attr(out, cached_sym<"row.names">(), row_names);
-  attr::set_attr(out, cached_sym<"class">(), make_vec<r_str>("data.frame"));
-  return out;
+r_vector<r_int> find_empty_string(r_vector<r_str> x){
+    return x.find(r_str(""));
+}
+',
+match_strs = '
+[[cppally::register]]
+r_vector<r_int> match_strs(r_vector<r_str> x, r_vector<r_str> table){
+    return match(x, table);
+}
+',
+cpp_in = '
+[[cppally::register]]
+r_vector<r_lgl> cpp_in(r_vector<r_str> x, r_vector<r_str> table){
+    return x IS_IN table;
+}
+',
+cpp_not_in = '
+[[cppally::register]]
+r_vector<r_lgl> cpp_not_in(r_vector<r_str> x, r_vector<r_str> table){
+    return !(x IS_IN table);
+}
+',
+cpp_subset = '
+template <RVector T, typename subscript_t>
+requires any<subscript_t, r_lgl, r_int, r_str>
+[[cppally::register]]
+T cpp_subset(T x, r_vector<subscript_t> y){
+    return subset(x, y);
+}
+',
+cpp_negative_subset = '
+template <RVector T, typename subscript_t>
+requires any<subscript_t, r_lgl, r_int, r_str>
+[[cppally::register]]
+T cpp_negative_subset(T x, r_vector<subscript_t> y){
+    return subset(x, y, /*invert=*/ true);
+}
+',
+  setnames = '
+[[cppally::register]]
+r_vec<r_sexp> set_list_names(r_vec<r_sexp> x, r_vec<r_str> names){
+  x.set_names(names);
+  return x;
+}
+',
+cpp_seq_len = '
+[[cppally::register]]
+r_vec<r_int> cpp_seq_len(r_size_t n){
+  return sequence(n, /* from = */ r_int(1), /* by = */ r_int(1));
+}
+',
+cpp_sequences = '
+template <typename T>
+requires (any<T, r_int, r_int64, r_dbl>)
+[[cppally::register]]
+r_vec<r_sexp> cpp_sequences(r_vec<r_int> size, r_vec<T> from, r_vec<T> by){
+    return pmap([](auto a, auto b, auto c){
+        return as<r_sexp>(sequence(a, b, c));
+    }, size, from, by);
 }
 '
 )
@@ -321,6 +405,23 @@ single_exprs <- c(
   r_true_val          = 'r_true',
   r_false_val         = 'r_false',
   r_na_val            = 'r_na',
+  r_na_check          = 'is_na(na<r_int>())',
+  r_plus              = 'r_int(0) + r_dbl(2.5)',
+  r_plus_na           = 'na<r_int>() + r_dbl(2.5)',
+  r_minus             = 'r_int(0) - r_int(1)',
+  r_minus_na          = 'na<r_int>() - r_int(1)',
+  r_mult              = 'r_int(2) * r_int(3)',
+  r_mult_na           = 'na<r_int>() * r_int(3)',
+  r_div               = 'r_dbl(9) / 3',
+  r_div_na            = 'na<r_dbl>() / 3',
+  r_lt                = 'r_int(1) < r_int(2)',
+  r_lt_na             = 'na<r_int>() < r_int(2)',
+  r_lte                = 'r_dbl(2) <= r_dbl(2)',
+  r_lte_na             = 'na<r_dbl>() <= r_dbl(2)',
+  r_gt                = 'r_int(3) > r_int(2)',
+  r_gt_na             = 'na<r_int>() > r_int(2)',
+  r_gte                = 'r_dbl(2) >= r_dbl(3)',
+  r_gte_na             = 'na<r_dbl>() >= r_dbl(3)',
   make_vec_dbl        = 'make_vec<r_dbl>(1, 1.5, 2, na<r_dbl>())',
   make_vec_dbl_named  = '
 make_vec<r_dbl>(
@@ -336,7 +437,9 @@ make_vec<r_dbl>(
   r_sym_new           = 'r_sym("new_symbol")',
   r_sym_from_str      = 'r_sym(r_str("symbol_from_string"))',
   cached_str_demo     = 'cached_str<"cached_string">()',
-  cached_sym_demo     = 'cached_sym<"cached_symbol">()'
+  cached_sym_demo     = 'cached_sym<"cached_symbol">()',
+  cpp_seq             = 'seq(r_dbl(1), r_dbl(5), r_dbl(0.5))',
+  cpp_sequence        = 'sequence(5, /*from = */ r_int(0), /*by = */ r_int(-1))'
 )
 
 register_single_exprs(single_exprs, debug = TRUE)
@@ -393,6 +496,125 @@ also_good_lgl_print(FALSE)
 also_good_lgl_print(NA) # Falls into 'not true' branch here as expected
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_na_check"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_na_check()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cppally_equality"]])
+
+## -----------------------------------------------------------------------------
+cppally_equality()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cppally_identical"]])
+
+## -----------------------------------------------------------------------------
+cpp_identical(3L, 3L)
+cpp_identical(NA, NA)
+cpp_identical(3L, 3) # int != double
+cpp_identical(1:10, 1:10)
+cpp_identical(list(1, 2, 3), list(3, 2, 1))
+cpp_identical(iris, iris)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_plus"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_plus()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_minus"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_minus()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_mult"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_mult()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_div"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_div()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_plus_na"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_plus_na()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_minus_na"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_minus_na()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_mult_na"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_mult_na()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_div_na"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_div_na()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_lt"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_lt()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_lte"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_lte()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_gt"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_gt()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_gte"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_gte()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_lt_na"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_lt_na()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_lte_na"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_lte_na()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_gt_na"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_gt_na()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["r_gte_na"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+r_gte_na()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(examples[["new_integer_vector"]])
 
 ## -----------------------------------------------------------------------------
@@ -423,25 +645,11 @@ as_cpp_chunk(examples[["all_vectors"]])
 all_vectors()
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
-as_cpp_chunk(examples[["cpp_abs"]])
+as_cpp_chunk(examples[["cppally_math"]])
 
 ## -----------------------------------------------------------------------------
-cpp_abs(-5)
-cpp_abs(0)
-cpp_abs(100)
-cpp_abs(NA_real_)
-
-## -----------------------------------------------------------------------------
-cpp_abs(-3L)
-cpp_abs(NA_integer_)
-
-## ----echo=FALSE, results = 'asis'---------------------------------------------
-as_cpp_chunk(examples[["scalar_default"]])
-
-## -----------------------------------------------------------------------------
-scalar_default(integer(1)) # Default is 0L
-scalar_default(numeric(1)) # Default is 0.0
-scalar_default(character(1)) # Default is ""
+cppally_math(2.5)
+cppally_math(NA)
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(examples[["double_to_int"]])
@@ -461,6 +669,12 @@ as_cpp_chunk(examples[["coercions"]])
 
 ## -----------------------------------------------------------------------------
 coercions()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["to_from_cpp_vec"]])
+
+## -----------------------------------------------------------------------------
+cpp_vectors_example(41L)
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(single_exprs[["r_str_hello"]])
@@ -514,27 +728,6 @@ new_list(3)
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(examples[["resize_all"]])
 
-## -----------------------------------------------------------------------------
-# Resize to size 1
-resize_all(list(1:5, letters), n = 1)
-
-## ----error=TRUE---------------------------------------------------------------
-try({
-resize_all(list(mean_fn = mean), 1)
-})
-
-## ----echo=FALSE, results = 'asis'---------------------------------------------
-as_cpp_chunk(examples[["resize_all2"]])
-
-## -----------------------------------------------------------------------------
-# Resize to size 1
-resize_all2(list(1:5, letters), n = 1)
-
-## ----error=TRUE---------------------------------------------------------------
-try({
-resize_all2(list(mean_fn = mean), n = 1)
-})
-
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(examples[["new_factor"]])
 
@@ -551,13 +744,126 @@ letter_fct |>
     factor_codes()
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
-as_cpp_chunk(examples[["list_as_df"]])
+as_cpp_chunk(examples[["find_empty_string"]])
+
+## -----------------------------------------------------------------------------
+x <- c("zero", "one", "two", "three", "four")
+
+find_empty_string(x)
+
+# Add empty strings
+x[c(1, 3)] <- ""
+
+find_empty_string(x)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["match_strs"]])
+
+## -----------------------------------------------------------------------------
+letters
+
+vowels <- c("a", "e", "i", "o", "u")
+
+# cppally::match is 0-indexed
+match_strs(vowels, letters)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_in"]])
+
+## -----------------------------------------------------------------------------
+cpp_in(c("a", "A", NA), letters)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_not_in"]])
+
+## -----------------------------------------------------------------------------
+cpp_not_in(c("a", "A", NA), letters)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_subset"]])
+
+## -----------------------------------------------------------------------------
+x <- 1:10
+cpp_subset(x, 0L) # index 0 is 1st value
+cpp_subset(x, 9L) # index 9 is last value here
+cpp_subset(x, 10L) # index 10 is out-of-bounds so NA is returned
+cpp_subset(x, NA_integer_) # NA is returned with integer NA index
+
+## -----------------------------------------------------------------------------
+cpp_subset(x, x > 5)
+cpp_subset(x, x > 100)
+
+# It differs to base subsetting (via `[`)
+cpp_subset(x, rep(NA, 10)) # cppally only returns values associated with TRUE
+x[rep(NA, 10)] # base R returns NA values when subsetting with NA logicals
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_negative_subset"]])
+
+## -----------------------------------------------------------------------------
+cpp_negative_subset(x, 0L) # Everything but 1st
+cpp_negative_subset(x, x > 5) # Everything except where x > 5
+cpp_negative_subset(x, integer()) # Everything
+
+## -----------------------------------------------------------------------------
+names(x) <- LETTERS[seq_along(x)]
+
+cpp_subset(x, c("A", "J", "Z"))
+cpp_negative_subset(x, "A")
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_abs"]])
+
+## -----------------------------------------------------------------------------
+cpp_abs(-4.2)
+cpp_abs(-3L)
+
+class(cpp_abs(-4.2)) # Double preserved
+class(cpp_abs(-3L)) # Integer preserved
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["scalar_default"]])
+
+## -----------------------------------------------------------------------------
+scalar_default(integer(1)) # Default is 0L
+scalar_default(numeric(1)) # Default is 0.0
+scalar_default(character(1)) # Default is ""
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["setnames"]])
 
 ## -----------------------------------------------------------------------------
 set.seed(42)
 norm_samples <- lapply(1:5, \(x) rnorm(10, mean = x))
-names(norm_samples) <- paste0("sample_", 1:5)
-list_as_df(norm_samples)
+set_list_names(norm_samples, paste0("sample_", 1:5))
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["cpp_seq"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+cpp_seq()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(single_exprs[["cpp_sequence"]])
+
+## ----echo=FALSE---------------------------------------------------------------
+cpp_sequence()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_seq_len"]])
+
+## -----------------------------------------------------------------------------
+cpp_seq_len(5)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_sequences"]])
+
+## -----------------------------------------------------------------------------
+cpp_sequences(1:3, from = 0L, by = 1L) |> 
+  unlist()
+
+# Same as base R
+sequence(1:3, from = 0L, by = 1L)
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(benchmark_examples[["cpp_n_unique"]])

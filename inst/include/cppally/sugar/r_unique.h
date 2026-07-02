@@ -1,42 +1,20 @@
 #ifndef CPPALLY_R_UNIQUE_H
 #define CPPALLY_R_UNIQUE_H
 
-#include <cppally/sugar/r_vec_methods.h>
+#include <cppally/r_vec_ops.h>
 #include <cppally/sugar/r_sort.h>
 #include <cppally/sugar/r_groups.h>
 #include <cppally/sugar/r_subset.h>
+#include <cppally/sugar/r_replace_at.h>
 
 namespace cppally {
 
-namespace internal {
-
-template <RVector T>
-T unsorted_unique(const T& x) {
-    auto group_info = make_groups(x);
-    auto starts = group_info.starts();
-    return x.subset(starts);
-}
-
-template <RVector T>
-T sorted_unique(const T& x) {
-    if constexpr (RSortableType<T>){
-        groups group_info = make_groups(x, true);
-        auto starts = group_info.starts();
-        return x.subset(starts);
-    } else {
-        return unsorted_unique(x); 
-    }
-}
-
-}
-
-template <RVector T>
+template <typename T>
+requires (RComposite<T> || RSexpType<T>)
 T unique(const T& x, bool sort = false) {
-    if (sort){
-        return internal::sorted_unique(x);
-    } else {
-        return internal::unsorted_unique(x);
-    }
+    groups group_info = make_groups(x, sort);
+    auto starts = group_info.starts();
+    return subset(x, starts);
 }
 
 template <RVector T>
@@ -45,13 +23,23 @@ r_vec<r_lgl> duplicated(const T& x, bool all = false){
   if (all){
     r_vec<r_int> sizes = g.counts();
     r_vec<r_lgl> is_dup = sizes > r_int(1);
-    return is_dup.subset(g.ids, false);
+    return is_dup.subset(g.ids, /*invert=*/ false, /*check=*/ false);
   } else {
     r_vec<r_lgl> out(x.length(), r_true);
-    out.fill(g.starts(), r_vec<r_lgl>(1, r_false));
+    replace_at(out, g.starts(), r_vec<r_lgl>(1, r_false));
     return out;
   }
 }
+
+inline r_vec<r_lgl> duplicated(const r_factors& x, bool all = false){
+    return duplicated(x.value);
+}
+
+inline r_vec<r_lgl> duplicated(const r_df& x, bool all = false){
+    return duplicated(make_groups(x, false).ids, all);
+}
+
+inline r_vec<r_lgl> duplicated(const r_sexp& x, bool all = false);
 
 template <RVal T>
 r_factors::r_factors(const r_vec<T>& x) : r_factors(x, unique(x)) {}

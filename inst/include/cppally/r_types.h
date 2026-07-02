@@ -15,7 +15,7 @@
 #include <cppally/r_sym.h>
 
 // R-based C++ types that closely align with their R equivalents
-// Further methods (e.g. operators) are defined in r_scalar_methods.h
+// Further methods (e.g. operators) are defined in r_scalar_ops.h
 // constructing R types via e.g. r_dbl() r_int() does not account for NAs
 // For any and all `NA` safe conversions, use the `as<>` template defined in r_coerce.h
 // For example - to construct an `r_int` from an integer `x`, simply write `r_int(x)`. 
@@ -25,49 +25,13 @@
 
 namespace cppally {
 
-// Recursively unwrap until we hit a primitive type
 template <typename T>
-inline constexpr auto unwrap(const T& x){
-if constexpr (RVal<T>){
-    return unwrap(x.value);
-  } else if constexpr (RObject<T>){
-    return static_cast<SEXP>(x);
-  } else {
-    return x;
-  }
-}
-
-// Coerce C/C++ types to RScalar
-template <typename T>
-inline constexpr auto as_r_scalar(T const& x) { 
-  if constexpr (RScalar<T>){
-    return x;
-  } else if constexpr (CastableToRScalar<T>){
-    return as_r_scalar_t<T>(x);
-  } else {
-    static_assert(
-      always_false<T>,
-      "Unsupported type for `as_r_scalar`"
-    );
-    return r_null;
-  } 
-}
-
-// Coerce to an RVal type (like as_r_scalar but it can also coerce to `r_sexp`)
-// It also coerces objects like `r_vec<T>` to the RVal `r_sexp` 
-template <typename T>
-inline constexpr auto as_r_val(T const& x) { 
-  if constexpr (RVal<T>){
-    return x;
-  } else if constexpr (CastableToRVal<T>){
-    return static_cast<as_r_val_t<T>>(x);
-  } else {
-    static_assert(
-      always_false<T>,
-      "Unsupported type for `as_r_val`"
-    );
-    return r_null;
-  } 
+inline constexpr unwrap_t<T> unwrap(const T& x) noexcept {
+  // T must be convertible (implicitly or explicitly) to unwrap_t<T>
+  // unwrap_t<> is a well-defined trait which handles the mapping
+  // It also asserts that it is a non-throwable construction
+  static_assert(std::is_nothrow_constructible_v<unwrap_t<T>, const T&>);
+  return static_cast<unwrap_t<T>>(x);
 }
 
 }

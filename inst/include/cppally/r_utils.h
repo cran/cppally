@@ -5,14 +5,18 @@
 
 namespace cppally {
 
-// Set & get the number of OMP threads
-inline int get_threads(){
-  auto n_threads = internal::CPPALLY_N_THREADS > OMP_MAX_THREADS ? OMP_MAX_THREADS : internal::CPPALLY_N_THREADS;
+// Maximum available threads
+inline int max_threads() noexcept {
+  return OMP_MAX_THREADS;
+}
+// get the number of OMP threads currently set for use
+inline int get_threads() noexcept {
+  auto n_threads = internal::CPPALLY_N_THREADS > max_threads() ? max_threads() : internal::CPPALLY_N_THREADS;
   return n_threads > 1 ? n_threads : 1;
 }
-inline void set_threads(int n){
-  int max_threads = OMP_MAX_THREADS;
-  internal::CPPALLY_N_THREADS = n < max_threads ? n : max_threads;
+// Set number threads to be used throughout the program
+inline void set_threads(int n) noexcept {
+  internal::CPPALLY_N_THREADS = n < max_threads() ? n : max_threads();
 }
 
 // Recycle loop indices
@@ -29,7 +33,7 @@ inline constexpr void recycle_index(T& v, T size) {
 
 namespace internal {
 
-template<typename T, typename U>
+template <typename T, typename U>
 inline constexpr bool between_impl(const T x, const U lo, const U hi) {
   return x >= lo && x <= hi;
 }

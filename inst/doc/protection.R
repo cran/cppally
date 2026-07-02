@@ -201,13 +201,9 @@ int cpp11_na_count(SEXP x){
 # Compiled in their own batch since they are illustrative rather than benchmarked.
 display_only <- c(
   view_good = '
-void good(r_str x){
+bool good(r_str x){
   r_str_view str = x;
-  if (str.cpp_str() == "true"){
-    print("true");
-  } else {
-    print("false");
-  }
+  return is_na(str); // str only used for temporary read-only context
 }
 ',
   view_bad = '

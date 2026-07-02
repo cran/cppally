@@ -4,7 +4,7 @@
 #include <cppally/r_vec.h>
 #include <cppally/r_visit.h>
 #include <cppally/r_attrs.h>
-#include <cppally/sugar/r_identical.h>
+#include <cppally/r_identical.h>
 #include <bit>
 #include <algorithm>
 #include <ankerl/unordered_dense.h> // Hash maps for group IDs + unique + match
@@ -32,10 +32,10 @@ inline constexpr uint64_t mix_u64(uint64_t x) noexcept {
     return x;
 }
 
-inline consteval uint64_t na_real_hash(){
+inline consteval uint64_t na_real_hash() noexcept {
     return mix_u64(na_real_bits());
 }
-inline consteval uint64_t nan_hash(){
+inline consteval uint64_t nan_hash() noexcept {
     return mix_u64(nan_bits());
 }
 
@@ -80,7 +80,7 @@ inline uint64_t r_hash_impl(const r_str_view& x) noexcept {
 
 template <>
 inline uint64_t r_hash_impl(const r_str& x) noexcept {
-        return r_hash_impl(r_str_view(x));
+    return r_hash_impl(r_str_view(x));
 };
 
 template <>
@@ -92,7 +92,7 @@ inline uint64_t r_hash_impl(const r_sym& x) noexcept {
 // Vector hashing
 
 template <RVector T>
-inline uint64_t r_hash_impl(const T& x) noexcept {
+inline uint64_t r_hash_impl(const T& x) {
         
     if (x.is_null()) return 0;
     r_size_t n = x.length();
@@ -113,37 +113,21 @@ inline uint64_t r_hash_impl(const T& x) noexcept {
     return seed;
 };
 
-template<>
-inline uint64_t r_hash_impl(const r_factors& x) noexcept {
+inline uint64_t r_hash_impl(const r_factors& x) {
     return r_hash_impl(x.value);
 };
 
 
-// Specialization for elements of lists
-template<>
-inline uint64_t r_hash_impl(const r_sexp& x) noexcept {
-    if (x.is_null()) return 0;
-    
-    // Recursively hash the element
-    return view_sexp(x, [](const auto& vec) -> uint64_t {
-        using vec_t = std::remove_cvref_t<decltype(vec)>;
-        if constexpr (is<vec_t, r_sexp>){
-            abort("Unsupported element type, current implementation can only hash vectors and factors");
-        } else {
-            return r_hash_impl(vec);
-        }
-    });
-};
+// Overload for elements of lists — defined in sugar/r_sexp_methods.h
+inline uint64_t r_hash_impl(const r_sexp& x);
 
 
 template <typename T>
 struct r_hash {
-    
     using is_avalanching = void; // Tells ankerl this is already a good quality hash
-
     // For hash map memory efficiency we use the underlying type
     using base_t = unwrap_t<T>;
-    uint64_t operator()(const base_t& x) const noexcept {
+    uint64_t operator()(const base_t& x) const noexcept(RScalar<T>) {
         if constexpr (std::is_constructible_v<T, base_t, internal::view_tag>){
             return r_hash_impl(T(x, internal::view_tag{}));
         } else {
@@ -182,7 +166,24 @@ inline uint64_t get_hash_map_reserve_size<r_lgl>(uint64_t data_size) {
     return std::min<uint64_t>(std::bit_floor(data_size >> 2), 4);
 }
 
-
+// Vector of data frame row hashes - combine hashes across cols
+inline std::vector<uint64_t> row_hashes(const r_df& x) {
+    int nrow = x.nrow();
+    int ncol = x.ncol();
+    std::vector<uint64_t> row_ids(size_t(nrow), 0U);
+    for (int c = 0; c < ncol; ++c) {
+        internal::view_sexp(x.value.view(c), [&]<typename ColT>(const ColT& col) {
+            if constexpr (requires (int i) { r_hash_impl(col.view(i)); }) {
+                for (int i = 0; i < nrow; ++i) {
+                    row_ids[i] = hash_combine(row_ids[i], r_hash_impl(col.view(i)));
+                }
+            } else {
+                abort("make_groups(r_df): unsupported column type");
+            }
+        });
+    }
+    return row_ids;
+}
 
 }
 

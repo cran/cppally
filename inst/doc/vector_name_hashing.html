@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>Vector Names Hashing</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Vector Names Hashing</h1>
+
+
+
+<p>To speed up named-indexing, cppally implements hashing of vector
+names via a lazy cache-on-lookup approach. To better understand how this
+works, we will show what name-indexing in R looks like, how to improve
+it with hashing, as well as the benefits and limitations of cppally’s
+inherent lazy-hashing method.</p>
+<p>Let’s first load cppally</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(cppally)</span></code></pre></div>
+<p>Indexing into a vector by name is a useful idiom</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="co"># Name-value list</span></span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">list</span>(</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>  <span class="at">a =</span> <span class="dv">10</span>, </span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>  <span class="at">b =</span> <span class="dv">20</span>, </span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>  <span class="at">c =</span> <span class="dv">30</span></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>)</span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a>x[[<span class="st">&quot;c&quot;</span>]] <span class="co"># Index-by-name</span></span>
+<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a><span class="co">#&gt; [1] 30</span></span>
+<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a>x[[<span class="dv">3</span>]] <span class="co"># Index-by-location </span></span>
+<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a><span class="co">#&gt; [1] 30</span></span></code></pre></div>
+<p>It signifies to those reading the code the exact key we want.
+Compared to indexing by location, it is resilient to keys changing
+location.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a><span class="co"># If we insert an element between 2 and 3, x[[3]] changes</span></span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(</span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>  x[<span class="dv">1</span><span class="sc">:</span><span class="dv">2</span>], </span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>  <span class="fu">list</span>(<span class="at">d =</span> <span class="dv">40</span>), <span class="co"># New element</span></span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>  x[<span class="dv">3</span>]</span>
+<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a>)</span>
+<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a></span>
+<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a>x[[<span class="dv">3</span>]] <span class="co"># Now 40</span></span>
+<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a><span class="co">#&gt; [1] 40</span></span>
+<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a>x[[<span class="st">&quot;c&quot;</span>]] <span class="co"># Still the same value </span></span>
+<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a><span class="co">#&gt; [1] 30</span></span></code></pre></div>
+<div id="performance-of-indexing-by-location-versus-name" class="section level2">
+<h2>Performance of indexing by location versus name</h2>
+<p>For this we need a large name-value list</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">42</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>large <span class="ot">&lt;-</span> <span class="fu">as.list</span>(<span class="fu">sample.int</span>(<span class="dv">10</span><span class="sc">^</span><span class="dv">5</span>))</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a><span class="fu">names</span>(large) <span class="ot">&lt;-</span> <span class="fu">paste0</span>(<span class="st">&quot;name_&quot;</span>, <span class="fu">seq_along</span>(large))</span></code></pre></div>
+<p>Lookup by location is O(1) and very fast in R, regardless of the
+index</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="fu">library</span>(bench)</span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="fu">mark</span>(large[[<span class="dv">1</span>]])</span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a><span class="co">#&gt; # A tibble: 1 × 6</span></span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a><span class="co">#&gt;   expression      min   median `itr/sec` mem_alloc `gc/sec`</span></span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt; &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="co">#&gt; 1 large[[1]]    200ns    700ns  1377638.        0B        0</span></span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a><span class="fu">mark</span>(large[[<span class="fu">length</span>(large)]])</span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="co">#&gt; # A tibble: 1 × 6</span></span>
+<span id="cb5-9"><a href="#cb5-9" tabindex="-1"></a><span class="co">#&gt;   expression                  min   median `itr/sec` mem_alloc `gc/sec`</span></span>
+<span id="cb5-10"><a href="#cb5-10" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt;             &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
+<span id="cb5-11"><a href="#cb5-11" tabindex="-1"></a><span class="co">#&gt; 1 large[[length(large)]]    300ns    1.2µs   893376.        0B        0</span></span></code></pre></div>
+<p>Since R scans the names each time, lookup by name is O(n) and can be
+slow if names happen to be near the end of the vector</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="fu">mark</span>(</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>    <span class="at">by_name =</span> large[[<span class="st">&quot;name_1&quot;</span>]], </span>
+<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>    <span class="at">by_index =</span> large[[<span class="dv">1</span>]]</span>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a>)</span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a><span class="co">#&gt;   expression      min   median `itr/sec` mem_alloc `gc/sec`</span></span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt; &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a><span class="co">#&gt; 1 by_name       200ns    800ns  1182522.        0B        0</span></span>
+<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a><span class="co">#&gt; 2 by_index      200ns    800ns  1134250.        0B        0</span></span>
+<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a></span>
+<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a><span class="fu">mark</span>(</span>
+<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a>    <span class="at">by_name =</span> large[[<span class="st">&quot;name_100000&quot;</span>]], </span>
+<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a>    <span class="at">by_index =</span> large[[<span class="dv">100000</span>]]</span>
+<span id="cb6-14"><a href="#cb6-14" tabindex="-1"></a>)</span>
+<span id="cb6-15"><a href="#cb6-15" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
+<span id="cb6-16"><a href="#cb6-16" tabindex="-1"></a><span class="co">#&gt;   expression      min   median `itr/sec` mem_alloc `gc/sec`</span></span>
+<span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt; &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
+<span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a><span class="co">#&gt; 1 by_name       878µs   1.98ms      535.        0B        0</span></span>
+<span id="cb6-19"><a href="#cb6-19" tabindex="-1"></a><span class="co">#&gt; 2 by_index      200ns    700ns  1356484.        0B        0</span></span></code></pre></div>
+<p>If we created a hash table of names-values, we could speedup repeated
+lookups</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>names_hashtab <span class="ot">&lt;-</span> <span class="fu">hashtab</span>(<span class="at">size =</span> <span class="fu">length</span>(large))</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a><span class="cf">for</span> (i <span class="cf">in</span> <span class="fu">seq_along</span>(<span class="fu">names</span>(large))){</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a> nm <span class="ot">&lt;-</span> <span class="fu">names</span>(large)[[i]]</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a> <span class="fu">sethash</span>(names_hashtab, nm, large[[i]])</span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>}</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="co"># Confirm it worked</span></span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="fu">identical</span>(<span class="fu">gethash</span>(names_hashtab, <span class="st">&quot;name_10&quot;</span>), large[[<span class="st">&quot;name_10&quot;</span>]])</span>
+<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
+<p>Let’s now compare all three methods: lookup by location, name and
+hashed name</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a><span class="fu">mark</span>(</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a>    <span class="at">by_name =</span> large[[<span class="st">&quot;name_100000&quot;</span>]], </span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a>    <span class="at">by_index =</span> large[[<span class="dv">100000</span>]],</span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a>    <span class="at">by_hashed_name =</span> <span class="fu">gethash</span>(names_hashtab, <span class="st">&quot;name_100000&quot;</span>)</span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a>)</span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a><span class="co">#&gt; # A tibble: 3 × 6</span></span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a><span class="co">#&gt;   expression          min   median `itr/sec` mem_alloc `gc/sec`</span></span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt;     &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="co">#&gt; 1 by_name         870.3µs   2.07ms      503.        0B        0</span></span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a><span class="co">#&gt; 2 by_index          200ns    800ns  1329328.        0B        0</span></span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="co">#&gt; 3 by_hashed_name    1.3µs    3.3µs   295784.        0B        0</span></span></code></pre></div>
+<p>That worked! Extracting the value associated with the last name using
+the hash table was almost as fast as looking it up by location.</p>
+<p>cppally uses this same approach internally, attaching a lazy hash map
+cache to each <code>r_vector</code>.</p>
+<p>Due to R/C++ limitations, the cache cannot survive the R/C++ boundary
+as we cannot easily attach the cache to the returned <code>SEXP</code>.
+Therefore instead of a cache-on-1st-lookup approach, which would be most
+efficient, we implement a cache-on-2nd-lookup approach. This brings
+certain limitations when writing R functions that use cppally code.</p>
+<p>To understand the limitation, it is first crucial to understand how
+cppally registers C++ functions to R. R can only handle
+<code>SEXP</code> objects, a generic type that represents any R
+object.</p>
+<p>cppally automatically handles all conversions between cppally classes
+like <code>r_vector</code> and R’s <code>SEXP</code>. To illustrate
+this, suppose we have the identity function <code>foo()</code> that
+accepts an integer vector <code>x</code> and returns the same vector
+unchanged.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> foo<span class="op">(</span>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a>  <span class="cf">return</span> x<span class="op">;</span></span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The function is then registered to R (via
+<code>cppally::load_all()</code>) and the following R and C++ code is
+automatically generated.</p>
+<div id="generated-r-code" class="section level3">
+<h3>Generated R code</h3>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>foo</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a><span class="cf">function</span>(x) {</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a>  <span class="fu">.Call</span>(<span class="st">`</span><span class="at">_cppally_foo</span><span class="st">`</span>, x)</span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a>}</span></code></pre></div>
+</div>
+<div id="generated-c-code" class="section level3">
+<h3>Generated C++ code</h3>
+<div class="sourceCode" id="cb11"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> foo<span class="op">(</span>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> x<span class="op">);</span></span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="at">extern</span> <span class="st">&quot;C&quot;</span> SEXP _cppally_foo<span class="op">(</span>SEXP x<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>  BEGIN_CPPALLY</span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>  <span class="cf">return</span> cpp_to_r<span class="op">(::</span>foo<span class="op">(</span>as<span class="op">&lt;</span>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;&gt;(</span>x<span class="op">)));</span></span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>  END_CPPALLY</span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Looking at the generated R function <code>foo()</code>, we see
+<code>.Call()</code> is called and is passed the input <code>x</code>.
+<code>.Call()</code> is the R interface that allows us to pass R objects
+to C++.</p>
+<p>Looking at the generated C++ function -
+<code>BEGIN_CPPALLY/END_CPPALLY</code> are helpers that run the main
+code in try/catch blocks to catch any C++ errors and promote them to R
+errors. In theory, all R errors thrown by cppally are done via
+<code>R_UnwindProtect</code> which safely runs all C++ destructors on
+error.</p>
+<p>Looking at the innermost function, we can see the expression
+<code>as&lt;r_vector&lt;r_int&gt;&gt;(x)</code> - this converts the
+input <code>SEXP</code> from R into a fresh cppally integer vector. The
+C++ function <code>foo()</code> is then called with that vector, which
+is then passed to <code>cpp_to_r()</code> - a function that converts
+C/C++ objects back to <code>SEXP</code>.</p>
+<p>The conversions look like this:</p>
+<pre><code>SEXP              (R)
+  ↓ 
+r_vector&lt;r_int&gt;   (C++)
+  ↓
+r_vector&lt;r_int&gt;   (C++, via foo())
+  ↓
+SEXP              (R)</code></pre>
+<p>This round-trip from <code>SEXP</code> to
+<code>r_vector&lt;r_int&gt;</code> and back to <code>SEXP</code> happens
+every single time <code>foo()</code> is called (which happens via
+<code>.Call()</code>). Because <code>r_vector</code> is the class that
+builds and stores the cache, that cache is lost when converting to
+<code>SEXP</code> and therefore, the hashing approach becomes
+difficult.</p>
+<p>To mitigate the negative performance impacts of this limitation, we
+implement a hash-on-2nd-lookup approach. This means the first lookup is
+a linear scan, the second lookup triggers the hash map build before
+doing a hash lookup. All lookups from the 2nd onwards use the hash
+map.</p>
+<p>Practically speaking this shouldn’t negatively impact performance
+when doing lookups from R as one would have to write a function that
+performs exactly two lookups on each call to experience the highest cost
+penalty, something that while not impossible, is likely uncommon.</p>
+<p>In C++, the cache persists across calls since there is no
+<code>SEXP</code> round-trip. The first lookup is a linear scan, the
+second builds the hash map, and all subsequent lookups are O(1).</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>r_int a <span class="op">=</span> x<span class="op">.</span>get<span class="op">(</span><span class="st">&quot;a&quot;</span><span class="op">);</span> <span class="co">// linear scan </span></span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a>r_int b <span class="op">=</span> x<span class="op">.</span>get<span class="op">(</span><span class="st">&quot;b&quot;</span><span class="op">);</span> <span class="co">// hash map built + O(1) lookup </span></span>
+<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a>r_int c <span class="op">=</span> x<span class="op">.</span>get<span class="op">(</span><span class="st">&quot;c&quot;</span><span class="op">);</span> <span class="co">// O(1) lookup</span></span></code></pre></div>
+<p>Let’s illustrate this by visualising the per call cost as the number
+of lookups increases, comparing R and cppally.</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="fu">cpp_source</span>(<span class="at">code =</span> <span class="st">&#39;</span></span>
+<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a><span class="st">#include &lt;cppally.hpp&gt;</span></span>
+<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a><span class="st">using namespace cppally;</span></span>
+<span id="cb14-4"><a href="#cb14-4" tabindex="-1"></a></span>
+<span id="cb14-5"><a href="#cb14-5" tabindex="-1"></a><span class="st">[[cppally::register]]</span></span>
+<span id="cb14-6"><a href="#cb14-6" tabindex="-1"></a><span class="st">r_vec&lt;r_sexp&gt; do_lookup(r_vec&lt;r_sexp&gt; x, r_str name, int n_iterations){</span></span>
+<span id="cb14-7"><a href="#cb14-7" tabindex="-1"></a><span class="st">  r_vec&lt;r_sexp&gt; out(n_iterations);</span></span>
+<span id="cb14-8"><a href="#cb14-8" tabindex="-1"></a><span class="st">  for (int i = 0; i &lt; n_iterations; ++i){</span></span>
+<span id="cb14-9"><a href="#cb14-9" tabindex="-1"></a><span class="st">    out.set(i, x.get(name));</span></span>
+<span id="cb14-10"><a href="#cb14-10" tabindex="-1"></a><span class="st">  }</span></span>
+<span id="cb14-11"><a href="#cb14-11" tabindex="-1"></a><span class="st">  return out;</span></span>
+<span id="cb14-12"><a href="#cb14-12" tabindex="-1"></a><span class="st">}</span></span>
+<span id="cb14-13"><a href="#cb14-13" tabindex="-1"></a><span class="st">&#39;</span>)</span></code></pre></div>
+<p>R equivalent using <code>[[</code></p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a>r_do_lookup <span class="ot">&lt;-</span> <span class="cf">function</span>(x, name, n_iterations){</span>
+<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a>  out <span class="ot">&lt;-</span> <span class="fu">vector</span>(<span class="st">&quot;list&quot;</span>, n_iterations)</span>
+<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a>  <span class="cf">for</span> (i <span class="cf">in</span> <span class="fu">seq_along</span>(out)){</span>
+<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a>    out[[i]] <span class="ot">&lt;-</span> x[[name]]</span>
+<span id="cb15-5"><a href="#cb15-5" tabindex="-1"></a>  }</span>
+<span id="cb15-6"><a href="#cb15-6" tabindex="-1"></a>  out</span>
+<span id="cb15-7"><a href="#cb15-7" tabindex="-1"></a>}</span></code></pre></div>
+</div>
+</div>
+<div id="the-cost-of-first-lookup" class="section level2">
+<h2>The cost of first lookup</h2>
+<p>Here we are simply comparing the cost of doing a 1st-lookup, in both
+R and C++</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a>nm <span class="ot">&lt;-</span> <span class="fu">names</span>(large)[<span class="fu">length</span>(large)]</span>
+<span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a></span>
+<span id="cb16-3"><a href="#cb16-3" tabindex="-1"></a><span class="fu">mark</span>(</span>
+<span id="cb16-4"><a href="#cb16-4" tabindex="-1"></a>  <span class="at">cppally_one_lookup =</span> <span class="fu">do_lookup</span>(large, nm, <span class="dv">1</span>),</span>
+<span id="cb16-5"><a href="#cb16-5" tabindex="-1"></a>  <span class="at">base_one_lookup =</span> <span class="fu">r_do_lookup</span>(large, nm, <span class="dv">1</span>)</span>
+<span id="cb16-6"><a href="#cb16-6" tabindex="-1"></a>)</span>
+<span id="cb16-7"><a href="#cb16-7" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
+<span id="cb16-8"><a href="#cb16-8" tabindex="-1"></a><span class="co">#&gt;   expression              min   median `itr/sec` mem_alloc `gc/sec`</span></span>
+<span id="cb16-9"><a href="#cb16-9" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt;         &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
+<span id="cb16-10"><a href="#cb16-10" tabindex="-1"></a><span class="co">#&gt; 1 cppally_one_lookup   41.4µs   99.9µs    10723.        0B        0</span></span>
+<span id="cb16-11"><a href="#cb16-11" tabindex="-1"></a><span class="co">#&gt; 2 base_one_lookup      1.34ms   2.08ms      484.    21.5KB        0</span></span></code></pre></div>
+<p>While I’m not sure why cppally’s linear scan is faster than R’s, it
+may be due to the fact that direct data access is used to compare
+elements instead of <code>STRING_ELT()</code></p>
+</div>
+<div id="the-cost-of-many-lookups" class="section level2">
+<h2>The cost of many lookups</h2>
+<p>We will now plot the per-call cost of doing many repeated lookups to
+see how many lookups we need to do before we start seeing the benefits
+of hashing</p>
+<p><img role="img" aria-label src="data:image/png;base64,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" alt width="100%" /></p>
+<p>The plot shows an interesting story - the first lookup (linear scan)
+sets a baseline cost. The second lookup pays the cost of the hash map
+build, making it the most expensive per-lookup. From there, each
+additional lookup amortises the one-time hash build cost over more
+calls, so the average drops and stabilises well below the first-lookup
+baseline.</p>
+<p>Let’s see how this compares to a pseudo hash-on-1st lookup method. To
+achieve this we will set the first lookup to be a fast linear scan of
+the first name which means the rest of real lookups use hashing.</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a><span class="fu">cpp_source</span>(<span class="at">code =</span> <span class="st">&#39;</span></span>
+<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a><span class="st">#include &lt;cppally.hpp&gt;</span></span>
+<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a><span class="st">using namespace cppally;</span></span>
+<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a></span>
+<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a><span class="st">[[cppally::register]]</span></span>
+<span id="cb17-6"><a href="#cb17-6" tabindex="-1"></a><span class="st">r_vec&lt;r_sexp&gt; do_first_lookup_hashed(r_vec&lt;r_sexp&gt; x, r_str name, int n_iterations){</span></span>
+<span id="cb17-7"><a href="#cb17-7" tabindex="-1"></a><span class="st">  r_vec&lt;r_sexp&gt; out(n_iterations);</span></span>
+<span id="cb17-8"><a href="#cb17-8" tabindex="-1"></a><span class="st">  </span></span>
+<span id="cb17-9"><a href="#cb17-9" tabindex="-1"></a><span class="st">  // Initial lookup as fast linear scan to force all other lookups to be hashed</span></span>
+<span id="cb17-10"><a href="#cb17-10" tabindex="-1"></a><span class="st">  static_cast&lt;void&gt;(x.get(x.names().get(0)));</span></span>
+<span id="cb17-11"><a href="#cb17-11" tabindex="-1"></a><span class="st">  </span></span>
+<span id="cb17-12"><a href="#cb17-12" tabindex="-1"></a><span class="st">  for (int i = 0; i &lt; n_iterations; ++i){</span></span>
+<span id="cb17-13"><a href="#cb17-13" tabindex="-1"></a><span class="st">    out.set(i, x.get(name));</span></span>
+<span id="cb17-14"><a href="#cb17-14" tabindex="-1"></a><span class="st">  }</span></span>
+<span id="cb17-15"><a href="#cb17-15" tabindex="-1"></a><span class="st">  return out;</span></span>
+<span id="cb17-16"><a href="#cb17-16" tabindex="-1"></a><span class="st">}</span></span>
+<span id="cb17-17"><a href="#cb17-17" tabindex="-1"></a><span class="st">&#39;</span>)</span></code></pre></div>
+<p><img role="img" aria-label src="data:image/png;base64,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" alt width="100%" /></p>
+<p>The two lines are overlapping after a few lookups, signifying that
+there is little penalty to waiting until the 2nd lookup to build the
+hash map.</p>
+<p>Let’s also plot some comparisons comparing repeated hash lookups
+against repeated linear scan lookups. At the same time we will also use
+a larger list.</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a>large <span class="ot">&lt;-</span> <span class="fu">as.list</span>(<span class="fu">sample.int</span>(<span class="fl">5e05</span>))</span>
+<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a><span class="fu">names</span>(large) <span class="ot">&lt;-</span> <span class="fu">paste0</span>(<span class="st">&quot;name_&quot;</span>, <span class="fu">seq_along</span>(large))</span>
+<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a></span>
+<span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a><span class="fu">cpp_source</span>(<span class="at">code =</span> <span class="st">&#39;</span></span>
+<span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a><span class="st">#include &lt;cppally.hpp&gt;</span></span>
+<span id="cb18-6"><a href="#cb18-6" tabindex="-1"></a><span class="st">using namespace cppally;</span></span>
+<span id="cb18-7"><a href="#cb18-7" tabindex="-1"></a></span>
+<span id="cb18-8"><a href="#cb18-8" tabindex="-1"></a><span class="st">[[cppally::register]]</span></span>
+<span id="cb18-9"><a href="#cb18-9" tabindex="-1"></a><span class="st">r_vec&lt;r_sexp&gt; do_linear_lookup(r_vec&lt;r_sexp&gt; x, r_str name, int n_iterations){</span></span>
+<span id="cb18-10"><a href="#cb18-10" tabindex="-1"></a><span class="st">  r_vec&lt;r_sexp&gt; out(n_iterations);</span></span>
+<span id="cb18-11"><a href="#cb18-11" tabindex="-1"></a><span class="st">  r_vec&lt;r_str&gt; names = as&lt;r_vec&lt;r_str&gt;&gt;(x.names());</span></span>
+<span id="cb18-12"><a href="#cb18-12" tabindex="-1"></a><span class="st">  int n = names.length();</span></span>
+<span id="cb18-13"><a href="#cb18-13" tabindex="-1"></a><span class="st">  auto *p = names.data(); // Use ptr to allow O2 optimisations here for fair comparison</span></span>
+<span id="cb18-14"><a href="#cb18-14" tabindex="-1"></a><span class="st">  for (int i = 0; i &lt; n_iterations; ++i){</span></span>
+<span id="cb18-15"><a href="#cb18-15" tabindex="-1"></a><span class="st">    for (int j = 0; j &lt; n; ++j){</span></span>
+<span id="cb18-16"><a href="#cb18-16" tabindex="-1"></a><span class="st">      if (unwrap(name) == p[j]){</span></span>
+<span id="cb18-17"><a href="#cb18-17" tabindex="-1"></a><span class="st">        out.set(i, x.view(j));</span></span>
+<span id="cb18-18"><a href="#cb18-18" tabindex="-1"></a><span class="st">        break;</span></span>
+<span id="cb18-19"><a href="#cb18-19" tabindex="-1"></a><span class="st">      }</span></span>
+<span id="cb18-20"><a href="#cb18-20" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb18-21"><a href="#cb18-21" tabindex="-1"></a><span class="st">  }</span></span>
+<span id="cb18-22"><a href="#cb18-22" tabindex="-1"></a><span class="st">  return out;</span></span>
+<span id="cb18-23"><a href="#cb18-23" tabindex="-1"></a><span class="st">}</span></span>
+<span id="cb18-24"><a href="#cb18-24" tabindex="-1"></a><span class="st">&#39;</span>)</span></code></pre></div>
+<p><img role="img" aria-label src="data:image/png;base64,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" alt width="100%" /></p>
+<p>The best and worst case linear scans are presented for illustrative
+purposes even though they are not realistic with real data. The most
+informative comparison is between the trend of the hash lookup cost
+versus the linear scan (mixed case). We can see that for the first few
+lookups the linear scan dominates (as expected), but as the number of
+lookups increases, the hash approach begins to outperform the linear
+scan (mixed case) and stabilises well below it.</p>
+<p>In summary, cppally’s lazy hashing trades a one-time hash build cost
+for fast repeated lookups. The approach works best in C++, where the
+cache persists across calls. From R, each call starts fresh, so the
+benefit is limited to functions that perform multiple lookups within a
+single call.</p>
+</div>
+<div id="future-development" class="section level2">
+<h2>Future development</h2>
+<p>While not explored in this vignette, it is possible to preserve the
+cache across the R/C++ boundary. By attaching an
+<code>externalptr</code> to the <code>names_map</code> as an attribute
+of a custom R vector class, the cache lifetime is tied to the lifetime
+of the R object (provided that <code>externalptr</code> is kept as an
+attribute). This may require cppally support for injecting a pre-built
+cache into a fresh <code>r_vector</code> wrapper, but is otherwise a
+tractable extension.</p>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>

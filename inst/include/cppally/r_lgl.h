@@ -4,6 +4,7 @@
 #include <cppally/r_setup.h>
 #include <cppally/r_concepts.h>
 #include <cppally/r_protect.h>
+#include <limits>
 
 namespace cppally {
 
@@ -14,14 +15,14 @@ namespace cppally {
 struct r_lgl {
   int value;
   using value_type = int;
-  r_lgl() : value{0} {}
-  explicit constexpr r_lgl(int x) : value{x} {}
-  explicit constexpr r_lgl(bool x) : value{x} {}  
-  explicit constexpr operator int() const { return value; }
+  constexpr r_lgl() noexcept : value{0} {}
+  explicit constexpr r_lgl(int x) noexcept : value{x} {} 
+  explicit constexpr r_lgl(bool x) noexcept : value{x} {}
+  explicit constexpr operator int() const noexcept { return value; }
 
   explicit operator bool() const;
-  constexpr bool is_true() const;
-  constexpr bool is_false() const;
+  constexpr bool is_true() const noexcept;
+  constexpr bool is_false() const noexcept;
 };
 
 // The 3 possible values of r_lgl
@@ -29,11 +30,11 @@ inline constexpr r_lgl r_true{1};
 inline constexpr r_lgl r_false{0};
 inline constexpr r_lgl r_na{std::numeric_limits<int>::min()};
 
-inline constexpr bool r_lgl::is_true() const {
+inline constexpr bool r_lgl::is_true() const noexcept {
     return value == 1;
 }
 
-inline constexpr bool r_lgl::is_false() const {
+inline constexpr bool r_lgl::is_false() const noexcept {
     return value == 0;
 }
 

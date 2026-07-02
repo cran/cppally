@@ -7,6 +7,7 @@
 #include <cstdint> // For uint32_t and similar
 #include <cstring> // For strcmp
 #include <vector> // For C++ vectors
+#include <numeric>
 #include <limits>
 #include <ankerl/unordered_dense.h> // Hash maps for group IDs + unique + match
 #include <ska_sort/ska_sort.hpp> // For radix sorting via ska_sort
@@ -18,24 +19,24 @@ namespace internal {
 // general order vector that sorts `x`
 // NAs are ordered last
 // Internal function to be used for low overhead sorting small vectors (n<500)
-template <RSortableType T>
-r_vec<r_int> cpp_order(const r_vec<T>& x) {
-    int n = x.size();
+template <RSortableVector T>
+r_vec<r_int> cpp_order(const T& x) {
+    using data_t = typename T::data_type;
+    int n = x.length();
     r_vec<r_int> p(n);
-    OMP_SIMD
-    for (r_size_t i = 0; i < n; ++i) p.set(i, r_int(static_cast<int>(i)));
+    p.iota();
 
     auto *p_x = x.data();
 
-    if constexpr (RNumericType<T>){
-        std::sort(p.begin(), p.end(), [&](int i, int j) {
+    if constexpr (RNumericType<data_t>){
+        std::sort(p.data(), p.data() + n, [&](int i, int j) {
             if (is_na(x.view(i))) return false;
             if (is_na(x.view(j))) return true;
             return p_x[i] < p_x[j];
         });
     } else {
         // Below works on strings
-        std::sort(p.begin(), p.end(), [&](int i, int j) {
+        std::sort(p.data(), p.data() + n, [&](int i, int j) {
             auto res = x.view(i) < x.view(j);
             if (is_na(res)){
                 if (is_na(x.view(i))){
@@ -50,24 +51,24 @@ r_vec<r_int> cpp_order(const r_vec<T>& x) {
     return p;
 }
 
-template <RSortableType T>
-r_vec<r_int> cpp_stable_order(const r_vec<T>& x) {
-    int n = x.size();
+template <RSortableVector T>
+r_vec<r_int> cpp_stable_order(const T& x) {
+    using data_t = typename T::data_type;
+    int n = x.length();
     r_vec<r_int> p(n);
-    OMP_SIMD
-    for (r_size_t i = 0; i < n; ++i) p.set(i, r_int(static_cast<int>(i)));
+    p.iota();
 
     auto *p_x = x.data();
 
-    if constexpr (RNumericType<T>){
-        std::stable_sort(p.begin(), p.end(), [&](int i, int j) {
+    if constexpr (RNumericType<data_t>){
+        std::stable_sort(p.data(), p.data() + n, [&](int i, int j) {
             if (is_na(x.view(i))) return false;
             if (is_na(x.view(j))) return true;
             return p_x[i] < p_x[j];
         });
     } else {
         // Below works on strings
-        std::stable_sort(p.begin(), p.end(), [&](int i, int j) {
+        std::stable_sort(p.data(), p.data() + n, [&](int i, int j) {
             auto res = x.view(i) < x.view(j);
             if (is_na(res)){
                 if (is_na(x.view(i))){
@@ -86,12 +87,13 @@ r_vec<r_int> cpp_stable_order(const r_vec<T>& x) {
 
 // 0-indexed ordering permutation vector that represents in sequential order, 
 // the indices of `x` elements that need to be chosen to return a sorted `x`
-template <RSortableType T>
-inline r_vec<r_int> order(const r_vec<T>& x, bool preserve_ties = true) {
+template <RSortableVector T>
+inline r_vec<r_int> order(const T& x, bool preserve_ties = true) {
 
-    using base_t = unwrap_t<T>;
+    using data_t = typename T::data_type;
+    using base_t = unwrap_t<data_t>;
 
-    uint32_t n = x.size();
+    uint32_t n = x.length();
     if (n < 500){
         if (preserve_ties){
             return internal::cpp_stable_order(x);
@@ -100,134 +102,150 @@ inline r_vec<r_int> order(const r_vec<T>& x, bool preserve_ties = true) {
         }
     }
 
+    if constexpr (RNumericType<data_t>) {
+
+        // ----------------------------------------------------------------------
+        // Integers with small range optimisation
+        // ----------------------------------------------------------------------
+        
+        if constexpr (RIntegerType<data_t>) {
     
-    // ----------------------------------------------------------------------
-    // Types with numeric storage
-    // ----------------------------------------------------------------------
+            if (n >= 100000){
     
-    if constexpr (RIntegerType<T>) {
-
-        if (n >= 100000){
-
-        r_vec<r_int> out(n);
-
-        auto rng = range(x, true);
-
-        auto* RESTRICT px = x.data();
-        
-        // Find min/max and check for NAs
-        auto min_val = rng.get(0), max_val = rng.get(1);
-        r_int64 delta = is_na(max_val) || is_na(min_val) ? na<r_int64>() : 
-        r_int64(static_cast<int64_t>(unwrap(max_val))) - r_int64(static_cast<int64_t>(unwrap(min_val)));
-        bool all_nas = is_na(delta);
-        
-        // All NAs - just return sequential indices
-        if (all_nas) {
-            OMP_SIMD
-            for (uint32_t i = 0; i < n; ++i) out.set(i, r_int(static_cast<int>(i)));
-            return out;
-        }
-
-        constexpr int64_t COUNTING_SORT_THRESHOLD = 10000000;
-        
-        // Use counting sort for small range (O(n + range))
-        if ((delta >= 0 && delta < COUNTING_SORT_THRESHOLD).is_true()){
-            std::vector<uint32_t> counts(unwrap(delta) + 1, 0);
+            r_vec<r_int> out(static_cast<r_size_t>(n));
+    
+            auto rng = range(x, true);
+    
+            auto* RESTRICT px = x.data();
             
-            // First pass: count occurrences (ignore NAs)
-            bool has_nas = false;
-            for (uint32_t i = 0; i < n; ++i) {
-                if (!is_na(px[i])) {
-                    size_t idx = static_cast<size_t>(unwrap(px[i]) - min_val);
-                    counts[idx]++;
-                } else {
-                    has_nas = true;
-                }
+            // Find min/max and check for NAs
+            auto min_val = rng.get(0), max_val = rng.get(1);
+            r_int64 delta = is_na(max_val) || is_na(min_val) ? na<r_int64>() : 
+            r_int64(static_cast<int64_t>(unwrap(max_val))) - r_int64(static_cast<int64_t>(unwrap(min_val)));
+            bool all_nas = is_na(delta);
+            
+            // All NAs - just return sequential indices
+            if (all_nas) {
+                out.iota();
+                return out;
             }
+    
+            constexpr int64_t COUNTING_SORT_THRESHOLD = 10000000;
             
-            // Prefix sum: counts[i] becomes the starting position for value i
-            uint32_t total = 0;
-            uint32_t n_counts = counts.size();
-            for (size_t i = 0; i < n_counts; ++i) {
-                uint32_t old_count = counts[i];
-                counts[i] = total;
-                total += old_count;
-            }
-            
-            // Second pass: write indices in sorted order (stable)
-            int* RESTRICT p_out = out.data();
-            
-            // For each element, place it at counts[value], then increment
-            for (uint32_t i = 0; i < n; ++i) {
-                if (!is_na(px[i])) {
-                    size_t idx = static_cast<size_t>(unwrap(px[i]) - min_val);
-                    p_out[counts[idx]++] = static_cast<int>(i);
-                }
-            }
-            
-            // Append NAs at end (preserving input order)
-            if (has_nas) {
+            // Use counting sort for small range (O(n + range))
+            if ((delta >= 0 && delta < COUNTING_SORT_THRESHOLD).is_true()){
+                std::vector<uint32_t> counts(unwrap(delta) + 1, 0);
+                
+                // First pass: count occurrences (ignore NAs)
+                bool has_nas = false;
                 for (uint32_t i = 0; i < n; ++i) {
-                    if (is_na(px[i])) {
-                        p_out[total++] = static_cast<int>(i);
+                    if (!is_na(px[i])) {
+                        size_t idx = static_cast<size_t>(unwrap(px[i]) - min_val);
+                        counts[idx]++;
+                    } else {
+                        has_nas = true;
                     }
                 }
+                
+                // Prefix sum: counts[i] becomes the starting position for value i
+                uint32_t total = 0;
+                uint32_t n_counts = counts.size();
+                for (size_t i = 0; i < n_counts; ++i) {
+                    uint32_t old_count = counts[i];
+                    counts[i] = total;
+                    total += old_count;
+                }
+                
+                // Second pass: write indices in sorted order (stable)
+                int* RESTRICT p_out = out.data();
+                
+                // For each element, place it at counts[value], then increment
+                for (uint32_t i = 0; i < n; ++i) {
+                    if (!is_na(px[i])) {
+                        size_t idx = static_cast<size_t>(unwrap(px[i]) - min_val);
+                        p_out[counts[idx]++] = static_cast<int>(i);
+                    }
+                }
+                
+                // Append NAs at end (preserving input order)
+                if (has_nas) {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (is_na(px[i])) {
+                            p_out[total++] = static_cast<int>(i);
+                        }
+                    }
+                }
+                return out;
             }
-            
-            return out;
         }
     }
-}
 
-    if constexpr (RNumericType<T>) {
+    r_vec<r_int> out(static_cast<r_size_t>(n));
+    int* RESTRICT p_out = out.data();
+    const auto* RESTRICT p_x = x.data();
 
-        using unsigned_t = decltype(ska_sort::detail::to_unsigned_or_bool(std::declval<base_t>()));
-        
-        r_vec<r_int> out(n);
-        auto* RESTRICT px = x.data();
-        
-        struct key_index {
-            unsigned_t key;
-            uint32_t index;
-        };
-        
-        std::vector<key_index> pairs;
-        pairs.reserve(n);
+    using unsigned_t = decltype(ska_sort::detail::to_unsigned_or_bool(std::declval<base_t>()));
 
-        for (uint32_t i = 0; i < n; ++i) {
-            unsigned_t key = is_na(px[i]) ? std::numeric_limits<unsigned_t>::max() : ska_sort::detail::to_unsigned_or_bool(px[i]);
-            pairs.push_back({key, i});
-        }
+    if constexpr (sizeof(unsigned_t) == sizeof(int)) {
+        // 32-bit key: sort r_vec<r_int> backing directly — single allocation, no copy
+        out.iota();
 
-        if (preserve_ties){
-        ska_sort::ska_sort(pairs.begin(), pairs.end(), 
-            [](const key_index& k){ return std::make_pair(k.key, k.index); });
+        if (preserve_ties) {
+            ska_sort::ska_sort(p_out, p_out + n, [&](uint32_t ui) {
+                unsigned_t key = is_na(p_x[ui]) ? std::numeric_limits<unsigned_t>::max()
+                                               : ska_sort::detail::to_unsigned_or_bool(p_x[ui]) - 1u; // -1 so that INT_MAX doesn't sort after NA
+                return std::make_pair(key, ui);
+            });
         } else {
-            ska_sort::ska_sort(pairs.begin(), pairs.end(), 
-            [](const key_index& k){ return k.key; });
+            ska_sort::ska_sort(p_out, p_out + n, [&](uint32_t ui) {
+                return is_na(p_x[ui]) ? std::numeric_limits<unsigned_t>::max()
+                                    : ska_sort::detail::to_unsigned_or_bool(p_x[ui]) - 1u; // -1 so that INT_MAX doesn't sort after NA
+            });
+        }
+    } else {
+        // 64-bit key: key_index struct keeps key co-located with index during sort
+        struct key_index {
+            unsigned_t key; 
+            uint32_t index; 
+        };
+
+        std::vector<key_index> pairs(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            pairs[i] = {
+                is_na(p_x[i]) ? std::numeric_limits<unsigned_t>::max()
+                             : ska_sort::detail::to_unsigned_or_bool(p_x[i]), // -1 so that INT_MAX doesn't sort after NA
+                i
+            };
         }
 
-        int* RESTRICT p_out = out.data();
+        if (preserve_ties) {
+            ska_sort::ska_sort(pairs.begin(), pairs.end(),
+                [](const key_index& k) { return std::make_pair(k.key, k.index); });
+        } else {
+            ska_sort::ska_sort(pairs.begin(), pairs.end(),
+                [](const key_index& k) { return k.key; });
+        }
         OMP_SIMD
         for (uint32_t i = 0; i < n; ++i) {
             p_out[i] = static_cast<int>(pairs[i].index);
         }
-        return out;
+    }
+    return out;
     }
 
     // ----------------------------------------------------------------------
     // Strings
     // ---------------------------------------------------------------------- 
 
-    else if constexpr (RStringType<T>) {
+    else if constexpr (RStringType<data_t>) {
     
         r_size_t n = x.length();
         r_vec<r_int> out(n);
         auto* RESTRICT px = x.data();
         
         // Single Hash Map to assign group IDs and count frequencies
-        ankerl::unordered_dense::map<SEXP, uint32_t, internal::r_hash<T>, internal::r_hash_eq<T>> lookup;
-        auto n_uniques_guess = internal::get_hash_map_reserve_size<T>(n);
+        ankerl::unordered_dense::map<SEXP, uint32_t, internal::r_hash<data_t>, internal::r_hash_eq<data_t>> lookup;
+        auto n_uniques_guess = internal::get_hash_map_reserve_size<data_t>(n);
         lookup.reserve(n_uniques_guess);
         
         std::vector<SEXP> uniques;
@@ -242,7 +260,7 @@ inline r_vec<r_int> order(const r_vec<T>& x, bool preserve_ties = true) {
         for (uint32_t i = 0; i < n; ++i) {
             SEXP str = px[i];
             
-            if (str == NA_STRING) {
+            if (internal::ptrs_identical(str, na<r_str_view>())){
                 group_ids.push_back(uint32_t(-1));
                 last_id = uint32_t(-1); // Break linear cache
             } 
@@ -268,18 +286,10 @@ inline r_vec<r_int> order(const r_vec<T>& x, bool preserve_ties = true) {
         uint32_t n_uniques = uniques.size();
 
         // Sort the unique group IDs
-        std::vector<uint32_t> sorted_ids;
-        sorted_ids.reserve(n_uniques);
-        std::vector<const char*> raw_strings;
-        raw_strings.reserve(n_uniques);
-
-        for (uint32_t i = 0; i < n_uniques; ++i){
-            sorted_ids.push_back(i);
-            raw_strings.push_back(CHAR(uniques[i]));
-        }
-
+        std::vector<uint32_t> sorted_ids(n_uniques);
+        std::iota(sorted_ids.begin(), sorted_ids.end(), 0u);
         std::sort(sorted_ids.begin(), sorted_ids.end(), [&](uint32_t a, uint32_t b) {
-            return std::strcmp(raw_strings[a], raw_strings[b]) < 0;
+            return std::strcmp(CHAR(uniques[a]), CHAR(uniques[b])) < 0;
         });
         
         // Prefix Sums: calculate the starting write offset for each group
@@ -314,18 +324,102 @@ inline r_vec<r_int> order(const r_vec<T>& x, bool preserve_ties = true) {
     }
 }
 
+inline r_vec<r_int> order(const r_factors& x, bool preserve_ties = true) {
+    return order(x.value);
+}
+
+inline r_vec<r_int> order(const r_sexp& x, bool preserve_ties = true);
+
+// Lexicographic order across all columns of a data frame
+//
+// Segmented multi-key sort:
+//   1. Sort all rows by col 0 using the fast single-column order() (ska_sort /
+//      counting sort / string hash-sort depending on type)
+//   2. Walk the result and find contiguous runs of equal col-0 values (tied
+//      segments). Any segment of length > 1 is pushed onto a work stack with
+//      col=1
+//   3. Pop a frame {start, end, col}: stable_sort out[start..end) by that
+//      column, then find ties within the sorted subrange and push survivors
+//      with col+1
+inline r_vec<r_int> order(const r_df& x, bool preserve_ties = true) {
+    int nrow = x.nrow();
+    int ncol = x.ncol();
+
+    r_vec<r_int> out(nrow);
+    out.iota();
+
+    if (nrow <= 1 || ncol == 0){
+        return out;
+    }
+
+    int* p_out = out.data();
+
+    // Each frame: sort out[start..end) by columns starting at `col`
+    struct frame { int start; int end; int col; };
+    std::vector<frame> stack;
+    stack.push_back({0, nrow, 0});
+
+    while (!stack.empty()) {
+        frame f = stack.back();
+        stack.pop_back();
+        if (f.col >= ncol) continue;
+
+        internal::view_sexp(x.value.view(f.col), [&]<typename ColT>(const ColT& col) {
+            if constexpr (requires (const ColT& c, int i) {
+                order(c, false);
+                identical(c.view(i), c.view(i));
+            }) {
+                if (f.start == 0 && f.end == nrow) {
+                    // Full-range sort: use the fast single-column order().
+                    // Must be stable when preserve_ties=true so rows fully tied
+                    // across all columns keep input-order through the chain.
+                    r_vec<r_int> o = order(col, preserve_ties);
+                    std::memcpy(p_out, o.data(), sizeof(int) * nrow);
+                } else {
+                    // Subsegment: stable_sort with single-column comparator
+                    std::stable_sort(p_out + f.start, p_out + f.end, [&](int a, int b) {
+                        if (is_na(col.view(a))) return false;
+                        if (is_na(col.view(b))) return true;
+                        auto lt = col.view(a) < col.view(b);
+                        return static_cast<bool>(unwrap(lt));
+                    });
+                }
+
+                // Push tied subsegments (size > 1) for next column
+                if (f.col + 1 < ncol) {
+                    int seg_start = f.start;
+                    for (int i = f.start + 1; i < f.end; ++i) {
+                        if (!identical(col.view(p_out[i]), col.view(p_out[i - 1]))) {
+                            if (i - seg_start > 1) {
+                                stack.push_back({seg_start, i, f.col + 1});
+                            }
+                            seg_start = i;
+                        }
+                    }
+                    if (f.end - seg_start > 1) {
+                        stack.push_back({seg_start, f.end, f.col + 1});
+                    }
+                }
+            } else {
+                abort("order(r_df): column does not support ordering");
+            }
+        });
+    }
+
+    return out;
+}
+
+
+inline r_vec<r_int> order(const r_sexp& x, bool preserve_ties);
 
 // Is x in a sorted order? i.e is x increasing but not necessarily monotonically?
 // To retrieve a bool result, use the `is_true` member function
-template <RSortableType T>
-inline r_lgl is_sorted(const r_vec<T>& x) {
-    
+template <RSortableVector T>
+inline r_lgl is_sorted(const T& x) {
     r_size_t n = x.length();
-
     for (r_size_t i = 1; i < n; ++i) {
-        
         r_lgl is_increasing = x.view(i) >= x.view(i - 1);
-        
+
         // If NA return NA, if false return false
         if (!is_increasing.is_true()){
             return is_increasing;
