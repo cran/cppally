@@ -32,70 +32,76 @@ using rhs_t = decltype(rhs);                                                    
 if constexpr (RAtomicVector<lhs_t> && RAtomicVector<rhs_t>){                                                                    \
   if (rhs.length() == 1){                                                                                                       \
     auto val = rhs.view(0);                                                                                                     \
-    return pmap_parallel_simd([&val](auto a) noexcept { return a OP val; }, lhs);                                               \
+    return pmap_parallel_simd([val](auto a) noexcept { return a OP val; }, lhs);                                                \
   } else if (lhs.length() == 1){                                                                                                \
     auto val = lhs.view(0);                                                                                                     \
-    return pmap_parallel_simd([&val](auto b) noexcept { return val OP b; }, rhs);                                               \
+    return pmap_parallel_simd([val](auto b) noexcept { return val OP b; }, rhs);                                                \
   } else {                                                                                                                      \
     return pmap_parallel_simd([](auto a, auto b) noexcept { return a OP b; }, lhs, rhs);                                        \
   }                                                                                                                             \
   /*Cases where one is a scalar*/                                                                                               \
 } else if constexpr (RAtomicVector<lhs_t>) {                                                                                    \
-  return pmap_parallel_simd([&rhs](auto a) noexcept { return a OP rhs; }, lhs);                                                 \
+  return pmap_parallel_simd([rhs](auto a) noexcept { return a OP rhs; }, lhs);                                                  \
 } else {                                                                                                                        \
-  return pmap_parallel_simd([&lhs](auto b) noexcept { return lhs OP b; }, rhs);                                                 \
+  return pmap_parallel_simd([lhs](auto b) noexcept { return lhs OP b; }, rhs);                                                  \
 }
 
-#define CPPALLY_BINARY_OP_IN_PLACE(OP)                                                                                                               \
-r_size_t lhs_size = lhs.length();                                                                                                                    \
-if constexpr (RAtomicVector<U>){                                                                                                                     \
-  r_size_t rhs_size = rhs.length();                                                                                                                  \
-  if (rhs_size == 1){                                                                                                                                \
-    auto val = rhs.view(0);                                                                                                                          \
-    lhs.apply([&val](auto a) noexcept { return a OP val; }, true, true);                                                                             \
-  } else if (lhs_size == rhs_size){                                                                                                                  \
-    const auto *p_rhs = rhs.data();                                                                                                                  \
-    using rhs_data_t = typename std::remove_cvref_t<U>::data_type;                                                                                   \
-    lhs.apply_with_index([&](r_size_t i, auto a) noexcept { return a OP rhs_data_t(p_rhs[i]); }, true, true);                                        \
-  } else {                                                                                                                                           \
-    r_size_t rhsi = 0;                                                                                                                               \
-    lhs.apply_with_index([&rhs, &rhsi, rhs_size](r_size_t i, auto a) noexcept {                                                                      \
-      auto r = rhs.view(rhsi);                                                                                                                       \
-      recycle_index(rhsi, rhs_size);                                                                                                                 \
-      return a OP r;                                                                                                                                 \
-    });                                                                                                                                              \
-  }                                                                                                                                                  \
-} else {                                                                                                                                             \
-  lhs.apply([&rhs](auto a) noexcept { return a OP rhs; }, true, true);                                                                               \
+#define CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, OP)                                                                                                        \
+using rhs_t = decltype(rhs);                                                                                                                            \
+r_size_t lhs_size = lhs.length();                                                                                                                       \
+if constexpr (RAtomicVector<rhs_t>){                                                                                                                    \
+  r_size_t rhs_size = rhs.length();                                                                                                                     \
+  if (rhs_size == 1){                                                                                                                                   \
+    auto val = rhs.view(0);                                                                                                                             \
+    lhs.apply([val](auto a) noexcept { return a OP val; }, true, true);                                                                                 \
+  } else if (lhs_size == rhs_size){                                                                                                                     \
+    const auto *p_rhs = rhs.data();                                                                                                                     \
+    using rhs_data_t = typename std::remove_cvref_t<rhs_t>::data_type;                                                                                  \
+    lhs.apply_with_index([p_rhs](r_size_t i, auto a) noexcept { return a OP rhs_data_t(p_rhs[i]); }, true, true);                                       \
+  } else {                                                                                                                                              \
+    r_size_t rhsi = 0;                                                                                                                                  \
+    lhs.apply_with_index([&rhs, &rhsi, rhs_size](r_size_t i, auto a) noexcept {                                                                         \
+      auto r = rhs.view(rhsi);                                                                                                                          \
+      recycle_index(rhsi, rhs_size);                                                                                                                    \
+      return a OP r;                                                                                                                                    \
+    });                                                                                                                                                 \
+  }                                                                                                                                                     \
+} else {                                                                                                                                                \
+  lhs.apply([rhs](auto a) noexcept { return a OP rhs; }, true, true);                                                                                   \
 }
 
-template<RAtomicVector T, typename U>
+template <RAtomicVector T, typename U>
+requires (RNumber<typename T::data_type>)
 inline T& operator+=(T& lhs, const U& rhs) {
-    CPPALLY_BINARY_OP_IN_PLACE(+)
+    CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, +=)
     return lhs;
 }
 
-template<RAtomicVector T, typename U>
+template <RAtomicVector T, typename U>
+requires (RNumber<typename T::data_type>)
 inline T& operator-=(T& lhs, const U& rhs) {
-    CPPALLY_BINARY_OP_IN_PLACE(-)
+    CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, -=)
     return lhs;
 }
 
-template<RAtomicVector T, typename U>
+template <RAtomicVector T, typename U>
+requires (RNumber<typename T::data_type>)
 inline T& operator*=(T& lhs, const U& rhs) {
-    CPPALLY_BINARY_OP_IN_PLACE(*)
+    CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, *=)
     return lhs;
 }
 
-template<RAtomicVector T, typename U>
+template <RAtomicVector T, typename U>
+requires (RNumber<typename T::data_type>)
 inline T& operator/=(T& lhs, const U& rhs) {
-    CPPALLY_BINARY_OP_IN_PLACE(/)
+    CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, /=)
     return lhs;
 }
 
-template<RAtomicVector T, typename U>
+template <RAtomicVector T, typename U>
+requires (RNumber<typename T::data_type>)
 inline T& operator%=(T& lhs, const U& rhs) {
-    CPPALLY_BINARY_OP_IN_PLACE(%)
+    CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, %=)
     return lhs;
 }
 
@@ -223,7 +229,7 @@ requires (
 inline r_vec<r_lgl> operator!=(T&& lhs, const U& rhs) {
     if constexpr (std::is_same_v<T, r_vec<r_lgl>>){
         if (internal::use_in_place_ops(lhs, rhs)){
-            CPPALLY_BINARY_OP_IN_PLACE(!=)
+            CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, !=)
             return std::move(lhs);
         }
     }
@@ -238,7 +244,7 @@ requires (
 inline r_vec<r_lgl> operator<=(T&& lhs, const U& rhs) {
     if constexpr (std::is_same_v<T, r_vec<r_lgl>>){
         if (internal::use_in_place_ops(lhs, rhs)){
-            CPPALLY_BINARY_OP_IN_PLACE(<=)
+            CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, <=)
             return std::move(lhs);
         }
     }
@@ -253,7 +259,7 @@ requires (
 inline r_vec<r_lgl> operator<(T&& lhs, const U& rhs) {
     if constexpr (std::is_same_v<T, r_vec<r_lgl>>){
         if (internal::use_in_place_ops(lhs, rhs)){
-            CPPALLY_BINARY_OP_IN_PLACE(<)
+            CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, <)
             return std::move(lhs);
         }
     }
@@ -268,7 +274,7 @@ requires (
 inline r_vec<r_lgl> operator>=(T&& lhs, const U& rhs) {
     if constexpr (std::is_same_v<T, r_vec<r_lgl>>){
         if (internal::use_in_place_ops(lhs, rhs)){
-            CPPALLY_BINARY_OP_IN_PLACE(>=)
+            CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, >=)
             return std::move(lhs);
         }
     }
@@ -283,7 +289,7 @@ requires (
 inline r_vec<r_lgl> operator>(T&& lhs, const U& rhs) {
     if constexpr (std::is_same_v<T, r_vec<r_lgl>>){
         if (internal::use_in_place_ops(lhs, rhs)){
-            CPPALLY_BINARY_OP_IN_PLACE(>)
+            CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, >)
             return std::move(lhs);
         }
     }
@@ -299,7 +305,7 @@ requires (
 inline r_vec<r_lgl> operator|(T&& lhs, const U& rhs) {
     if constexpr (std::is_same_v<T, r_vec<r_lgl>>){
         if (internal::use_in_place_ops(lhs, rhs)){
-            CPPALLY_BINARY_OP_IN_PLACE(||)
+            CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, ||)
             return std::move(lhs);
         }
     }
@@ -314,7 +320,7 @@ requires (
 inline r_vec<r_lgl> operator&(T&& lhs, const U& rhs) {
     if constexpr (std::is_same_v<T, r_vec<r_lgl>>){
         if (internal::use_in_place_ops(lhs, rhs)){
-            CPPALLY_BINARY_OP_IN_PLACE(&&)
+            CPPALLY_BINARY_OP_IN_PLACE(lhs, rhs, &&)
             return std::move(lhs);
         }
     }
@@ -337,7 +343,14 @@ inline r_vec<r_lgl> operator!(T&& x){
   return pmap_parallel_simd([](r_lgl v) noexcept { return !v; }, x);
 }
 
-template <internal::RMathVector T>
+template <RAtomicVector T>
+requires (RNumber<typename std::remove_cvref_t<T>::data_type>)
+inline std::remove_cvref_t<T> operator+(T&& x){
+    return std::forward<T>(x);
+}
+
+template <RAtomicVector T>
+requires (RNumber<typename std::remove_cvref_t<T>::data_type>)
 inline std::remove_cvref_t<T> operator-(T&& x){
   using data_t = typename std::remove_cvref_t<T>::data_type;
 
@@ -352,6 +365,13 @@ inline std::remove_cvref_t<T> operator-(T&& x){
     }
   }
   return pmap_parallel_simd([](data_t v) noexcept { return -v; }, x);
+}
+
+inline r_vec<r_int> operator+(const r_vec<r_lgl>& x){
+    return pmap_parallel_simd([](r_lgl v) noexcept { return +v; }, x);
+}
+inline r_vec<r_int> operator-(const r_vec<r_lgl>& x){
+    return pmap_parallel_simd([](r_lgl v) noexcept { return -v; }, x);
 }
 
 namespace internal {

@@ -12,16 +12,20 @@ namespace internal {
 // Always returns true if they are both the same NA
 // needed for hash equality
 
+template <RScalar T>
+inline bool identical_impl(const T& a, const T& b) noexcept {
+    if constexpr (RScalar<typename T::value_type>){
+        return identical_impl(a.value, b.value);
+      } else {
+        return unwrap(a) == unwrap(b);
+      }
+}
+
 template <CastableToRScalar T>
 requires (CppType<T>)
 inline bool identical_impl(const T& a, const T& b) noexcept {
     using r_t = as_r_scalar_t<T>;
     return identical_impl(r_t(a), r_t(b));
-}
-
-template <RScalar T>
-inline bool identical_impl(const T& a, const T& b) noexcept {
-    return unwrap(a) == unwrap(b);
 }
 
 template<>
@@ -35,7 +39,7 @@ inline bool identical_impl<r_dbl>(const r_dbl& a, const r_dbl& b) noexcept {
 
     // If both (NA or NaN)
     if (is_na(a) && is_na(b)){
-        return is_na_real(x) == is_na_real(y);
+        return has_na_real_payload(x) == has_na_real_payload(y);
     } else {
         return eq;
     }

@@ -12,19 +12,16 @@ namespace cppally {
 
 namespace internal {
 
-// Constructs R's NA_REAL: a signaling NaN with payload 1954 (0x7a2).
-// Bit 51 (quiet bit) = 0, so technically signaling NaN — a pattern R chose deliberately
-// Hex: 0x7ff00000 (Exp, bit51=0) << 32 | 0x7a2 (Payload).
-inline consteval double make_na_real() noexcept {
-  return std::bit_cast<double>(0x7ff00000000007a2ULL);
-}
-
 inline consteval uint64_t na_real_bits() noexcept {
-  return std::bit_cast<uint64_t>(make_na_real());
+  return std::bit_cast<uint64_t>(na_real);
 }
 
-inline constexpr bool is_na_real(double x) noexcept {
-  return std::bit_cast<uint64_t>(x) == na_real_bits();
+// Important: assumes x is already NA (via x != x)
+// Matches R's R_IsNA: a NaN carrying NA_real_'s payload (1954) in its low word.
+// Checks the payload rather than the full bit pattern so NA survives FP operations
+// (add/sub/mul, negation) that quiet the signaling NaN or flip its sign bit.
+inline constexpr bool has_na_real_payload(double x) noexcept {
+  return (std::bit_cast<uint64_t>(x) & 0xFFFFFFFFULL) == 1954ULL;
 }
 
 // Different NaN have different bit representations, so use with care
@@ -42,37 +39,37 @@ inline constexpr T na_value_impl() noexcept;
 
 template<>
 inline constexpr r_lgl na_value_impl<r_lgl>() noexcept {
-  return r_na;
+  return na_lgl;
 }
 
 template<>
 inline constexpr r_int na_value_impl<r_int>() noexcept {
-  return r_int(std::numeric_limits<int>::min());
+  return na_int;
 }
 
 template<>
 inline constexpr r_dbl na_value_impl<r_dbl>() noexcept {
-  return r_dbl(make_na_real());
+  return na_real;
 }
 
 template <RTimeType T>
 inline constexpr T na_value_impl() noexcept {
-  return T(na_value_impl<inherited_type_t<T>>());
+  return T::na();
 }
 
 template<>
 inline constexpr r_int64 na_value_impl<r_int64>() noexcept {
-  return r_int64(std::numeric_limits<int64_t>::min());
+  return na_int64;
 }
 
 template<>
 inline constexpr r_cplx na_value_impl<r_cplx>() noexcept {
-  return r_cplx(std::complex<double>{make_na_real(), make_na_real()});
+  return na_cplx;
 }
 
 template<>
 inline constexpr r_raw na_value_impl<r_raw>() noexcept {
-  return r_raw{0};
+  return na_raw;
 }
 
 template<>
@@ -100,27 +97,16 @@ inline constexpr T na() noexcept {
 template<typename T>
 inline constexpr bool is_na(const T& x) noexcept {
   if constexpr (RScalar<T>){
-    return unwrap(x) == unwrap(na<T>());
+    if constexpr (RScalar<typename T::value_type>){
+      return x.value.is_na();
+    } else {
+      return x.is_na();
+    }
   } else if constexpr (CastableToRScalar<T>){
-    return is_na(as_r_scalar_t<T>(x));
+    return as_r_scalar_t<T>(x).is_na();
   } else {
     return false;
   }
-}
-
-template<>
-inline constexpr bool is_na(const r_dbl& x) noexcept {
-  return unwrap(x) != unwrap(x);
-}
-
-template<>
-inline constexpr bool is_na(const r_cplx& x) noexcept {
-  return is_na(x.re()) || is_na(x.im());  
-}
-
-template<>
-inline constexpr bool is_na(const r_raw& x) noexcept {
-  return false;
 }
 
 template <typename T>
@@ -130,7 +116,7 @@ inline constexpr bool is_nan(const T& x) noexcept {
 // NaN but not NA_REAL
 template <>
 inline constexpr bool is_nan(const r_dbl& x) noexcept {
-  return is_na(x) && !internal::is_na_real(unwrap(x));
+  return is_na(x) && !internal::has_na_real_payload(unwrap(x));
 }
 
 // Inspired by SQL COALESCE: returns x, or y if x is NA.

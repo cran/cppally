@@ -1,10 +1,12 @@
 #ifndef CPPALLY_R_CONCEPTS_H
 #define CPPALLY_R_CONCEPTS_H
 
-#include <type_traits> // For concepts
+#include <concepts>
+#include <type_traits>
 #include <cstdint> // For uint32_t and similar
 #include <complex> // For complex<double>
 #include <limits>
+#include <utility> // for cmp_less_equal
 
 
 // Forward declarations
@@ -58,7 +60,16 @@ template <typename T>
 concept RObject = std::is_convertible_v<T, SEXP>;
 
 template <typename T>
+concept CppCharType = any<T, char, signed char, unsigned char, wchar_t, char8_t, char16_t, char32_t>;
+
+template <typename T>
 concept RLogicalType = is<T, r_lgl>; 
+
+template <typename T>
+concept CppLogicalType = is<T, bool>;
+
+template <typename T>
+concept LogicalType = RLogicalType<T> || CppLogicalType<T>;
 
 template <typename T>
 concept RShortIntegerType = is<T, r_int>;
@@ -83,6 +94,24 @@ concept CppFloatType = std::is_floating_point_v<std::remove_cvref_t<T>>;
 
 template <typename T>
 concept FloatType = RFloatType<T> || CppFloatType<T>;
+
+template <typename T>
+concept RIntegerNumber = RShortIntegerType<T> || RLongIntegerType<T>;
+
+template <typename T>
+concept CppIntegerNumber = std::is_integral_v<std::remove_cvref_t<T>> && !is<T, bool> && !CppCharType<T>;
+
+template <typename T>
+concept IntegerNumber = RIntegerNumber<T> || CppIntegerNumber<T>;
+
+template <typename T>
+concept RNumber = RIntegerNumber<T> || RFloatType<T>;
+
+template <typename T>
+concept CppNumber = std::is_arithmetic_v<std::remove_cvref_t<T>> && !is<T, bool> && !CppCharType<T>;
+
+template <typename T>
+concept Number = RNumber<T> || CppNumber<T>;
 
 namespace internal {
 
@@ -116,7 +145,7 @@ template <typename T>
 concept RTimeType = RDateType<T> || RPsxctType<T>;
 
 template <typename T>
-concept RMathType = RIntegerType<T> || RFloatType<T>;
+concept RMathType = RLogicalType<T> || RNumber<T>;
 
 template <typename T>
 concept CppMathType = std::is_arithmetic_v<std::remove_cvref_t<T>>;
@@ -167,12 +196,8 @@ concept RVal = RScalar<T> || is<T, r_sexp>;
 template <typename T>
 concept RVectorisable = RScalar<T> && !RObject<T>;
 
-template <typename T, typename U>
-concept AtLeastOneRMathType =
-(RMathType<T> || RMathType<U>) && (MathType<T> && MathType<U>);
-
 // Forward declare vector-based structs
-template<RVal T>
+template <RVal T>
 struct r_vec;
 struct r_factors;
 struct r_df;
@@ -255,41 +280,36 @@ namespace internal {
 // template <typename T>
 // concept LargeType = !SmallType<std::decay_t<T>>;
 
-template<typename T>
-inline consteval bool can_definitely_be_int(){
+// True when every value of From casts to To with no loss at all,
+// neither from overflow nor precision
+template <typename From, typename To>
+inline consteval bool lossless_numeric_cast(){
 
-    constexpr int max_int = std::numeric_limits<int>::max();
-
-    using xt = std::remove_cvref_t<T>;
-
-    if constexpr (!CppIntegerType<xt>) return false;
-
-    if constexpr (sizeof(xt) <= sizeof(int)) {
-        if constexpr (std::is_unsigned_v<xt>) {
-             return std::numeric_limits<xt>::max() <= static_cast<unsigned int>(max_int);
+    if constexpr (!CppMathType<From> || !CppMathType<To>){
+        return false;
+    } else {
+        if constexpr (CppIntegerType<From> && CppIntegerType<To>){
+            return std::cmp_less_equal(
+                +std::numeric_limits<To>::min(),
+                +std::numeric_limits<From>::min()
+            ) &&
+            std::cmp_greater_equal(
+                +std::numeric_limits<To>::max(),
+                +std::numeric_limits<From>::max()
+            );
+        } else if constexpr (CppFloatType<From> && CppFloatType<To> && sizeof(To) >= sizeof(From)){
+            // For IEEE floats, size order implies both mantissa and exponent range order
+            return true;
+        } else if constexpr (CppIntegerType<From> && CppFloatType<To>){
+            // Exact iff From's whole range lies within [-2^p, 2^p], where p is To's
+            // mantissa width — the largest range over which a float holds every integer
+            return std::numeric_limits<From>::digits <= std::numeric_limits<To>::digits;
+        } else {
+            return false;
         }
-        return true;
     }
-    return false;
-}
 
-template<typename T>
-inline consteval bool can_definitely_be_int64(){
-
-    constexpr int64_t max_int64 = std::numeric_limits<int64_t>::max();
-
-    using xt = std::remove_cvref_t<T>;
-
-    if constexpr (!CppIntegerType<xt>) return false;
-
-    if constexpr (sizeof(xt) <= sizeof(int64_t)) {
-        if constexpr (std::is_unsigned_v<xt>) {
-             return std::numeric_limits<xt>::max() <= static_cast<uint64_t>(max_int64);
-        }
-        return true; 
-    }
-    return false;
-}
+};
 
 // C/C++ -> RScalar mappings
 // RScalar maps to RScalar (identity)
@@ -307,15 +327,16 @@ template<> struct r_scalar_mapping<unsigned char>             { using type = r_r
 
 template <CppMathType T>
 struct r_scalar_mapping<T> {
-    using type = std::conditional_t<
-    can_definitely_be_int<T>(),
-    r_int,
+    using type = 
     std::conditional_t<
-        can_definitely_be_int64<T>(),
-        r_int64,
-        r_dbl
-    >
->;
+        lossless_numeric_cast<T, int>(),
+        r_int,
+        std::conditional_t<
+            lossless_numeric_cast<T, int64_t>(),
+            r_int64,
+            r_dbl
+            >
+        >;
 };
 
 }
@@ -381,19 +402,6 @@ using as_r_composite_t = typename internal::r_composite_mapping<std::remove_cvre
 namespace internal {
 
 template <typename T>
-struct inherited_type_impl { 
-    using type = T; 
-};
-template <RScalar T>
-requires requires { typename std::remove_cvref_t<T>::inherited_type; }
-struct inherited_type_impl<T> { 
-    using type = typename std::remove_cvref_t<T>::inherited_type; 
-};
-
-template <RScalar T>
-using inherited_type_t = typename internal::inherited_type_impl<std::remove_cvref_t<T>>::type;
-
-template <typename T>
 struct unwrapped_type {
     using type = T;
 };
@@ -434,7 +442,7 @@ consteval uint8_t r_type_rank() {
     if constexpr (is<T, r_psxct>)                   return 7;
     if constexpr (is<T, r_str>)                     return 8;
     if constexpr (is<T, r_str_view>)                return 9;
-    if constexpr (is<T, r_sexp>)                    return std::numeric_limits<uint8_t>::max()  - 1;
+    if constexpr (is<T, r_sexp>)                    return std::numeric_limits<uint8_t>::max() - 1;
 }
 
 template <MathType T, MathType U>
@@ -445,7 +453,8 @@ struct common_r_math_impl {
 
     static constexpr uint8_t rank_t = r_type_rank<lhs_math_t>();
     static constexpr uint8_t rank_u = r_type_rank<rhs_math_t>();
-    using type = std::conditional_t<(rank_t >= rank_u), lhs_math_t, rhs_math_t>;
+    using type = std::conditional_t<is<lhs_math_t, r_lgl> && is<rhs_math_t, r_lgl>, r_int, std::conditional_t<(rank_t >= rank_u), lhs_math_t, rhs_math_t>>;
+
 };
 
 template <typename T, typename U>

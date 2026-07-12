@@ -12,8 +12,6 @@
 
 #include <cppally/r_sexp_types.h>
 #include <cppally/r_coerce.h>
-#include <cppally/r_length.h>
-#include <cppally/r_df_methods.h> 
 #include <cstdint> // For uint32_t and similar
 #include <tuple>
 #include <utility>
@@ -26,7 +24,8 @@
 
 #define BEGIN_CPPALLY                   \
   SEXP err = R_NilValue;              \
-  char buf[CPPALLY_ERROR_BUFSIZE] = ""; \
+  char buf[CPPALLY_ERROR_BUFSIZE];    \
+  buf[0] = '\0';                      \
   try {
 
 #define END_CPPALLY                                               \
@@ -54,6 +53,29 @@ namespace cppally {
 
 
 namespace internal {
+
+// RScalar -> RVector
+// Everything else -> SEXP
+template <typename T>
+SEXP cpp_to_r(const T& x) {
+    if constexpr (RScalar<T>){
+      return static_cast<SEXP>(r_vec<T>(1, x));
+    } else {
+      return as<SEXP>(x);
+    }
+}
+
+// NULL is left alone where RComposite is concerned to allow passing optional arguments
+template <typename T>
+auto r_to_cpp(SEXP x) {
+    using out_t = std::remove_cvref_t<T>;
+    if constexpr (RComposite<out_t>){
+        if (x == R_NilValue){
+            return out_t(r_null);
+        }
+    }
+    return as<out_t>(x);
+}
 
 
 template <typename> struct fn_traits;
@@ -108,35 +130,6 @@ requires (CppScalar<T>)
 inline constexpr uint16_t r_cpp_boundary_map_v<T> = r_cpp_boundary_map_v<as_r_scalar_t<T>>;
 
 
-// ArgToTemplateMap maps argument positions to template parameter indices
-// e.g., {0, 0, 1} means args 0 and 1 share template param T, arg 2 uses U.
-// -1 means the argument is not templated (fixed type)
-// This function finds the first argument that "drives" template param TemplateParamIdx
-template <size_t TemplateParamIdx, size_t NumArgs, auto ArgToTemplateMap>
-constexpr size_t first_arg_for_template() {
-    for (size_t i = 0; i < NumArgs; ++i)
-        if (ArgToTemplateMap[i] == static_cast<int>(TemplateParamIdx)) return i;
-    return NumArgs;
-}
-
-
-// When multiple arguments share the same template parameter (e.g., f(T x, T y)),
-// they must all have the same R TYPEOF at runtime
-template <size_t TemplateParamIdx, size_t NumArgs, auto ArgToTemplateMap>
-void check_template_homogeneity(uint16_t expected_type, SEXP* args) {
-    for (size_t i = 0; i < NumArgs; ++i) {
-        if (ArgToTemplateMap[i] == static_cast<int>(TemplateParamIdx)) {
-            if (CPPALLY_TYPEOF(args[i]) != expected_type) {
-                abort(
-                    "R type: %s for arg %zu does not match the first instance: %s for this template arg",
-                    r_type_to_str(CPPALLY_TYPEOF(args[i])), i + 1, r_type_to_str(expected_type)
-                );
-            }
-        }
-    }
-}
-
-
 // ── FLAT FUNCTION POINTER TABLE ───────────────────────────────────────────────
 
 // The dispatcher pre-builds two flat arrays at compile time, indexed by a
@@ -149,6 +142,18 @@ void check_template_homogeneity(uint16_t expected_type, SEXP* args) {
 // At runtime, a linear scan finds the first entry where:
 //   - dispatch_table[I] is non-null (combination is valid for the lambda's concepts)
 //   - type_table[I][K] matches the actual CPPALLY_TYPEOF of the K-th template arg
+//
+// ArgToTemplateMap maps argument positions to template parameter indices
+// e.g., {0, 0, 1} means args 0 and 1 share template param T, arg 2 uses U.
+// -1 means the argument is not templated (fixed type)
+//
+// NULL (NILSXP) never drives deduction: a template param's runtime type comes from
+// its first non-NULL argument. A param whose args are all NULL is undeduced and acts
+// as a wildcard in a second scan pass (the runtime mirror of the r_sexp sentinel),
+// landing on the first instantiation that satisfies the constraints — with the NULL
+// itself preserved by the r_to_cpp boundary conversion. The wildcard follows
+// candidate order, so a constraint admitting both classed and plain types hands an
+// all-NULL param to the classed type first (r_factors before r_vec<r_lgl>).
 //
 // Crucially, the final call is through a function pointer.
 //
@@ -337,48 +342,103 @@ SEXP dispatch_template_impl(Functor&& functor, SexpArgs&&... sexp_args) {
 
     // Collect runtime types — plain loops to avoid Clang 22 ICE
     // with NTTP std::array forwarded through nested templates
+    // NULL args are skipped for both deduction and the homogeneity check
     uint32_t runtime_types[NumTemplateParams > 0 ? NumTemplateParams : 1]{};
+    bool has_undeduced = false;
     for (size_t k = 0; k < NumTemplateParams; ++k) {
-        size_t first_arg = NumArgs;
+        uint16_t param_type = NILSXP;
         for (size_t i = 0; i < NumArgs; ++i) {
-            if (ArgToTemplateMap[i] == static_cast<int>(k)) {
-                first_arg = i;
-                break;
+            if (ArgToTemplateMap[i] != static_cast<int>(k)) {
+                continue;
+            }
+            uint16_t arg_type = static_cast<uint16_t>(CPPALLY_TYPEOF(args[i]));
+            if (arg_type == NILSXP) {
+                continue;
+            }
+            if (param_type == NILSXP) {
+                param_type = arg_type;
+            } else if (arg_type != param_type) {
+                abort(
+                    "R type: %s for arg %zu does not match the first instance: %s for this template arg",
+                    r_type_to_str(arg_type), i + 1, r_type_to_str(param_type)
+                );
             }
         }
-        runtime_types[k] = static_cast<uint32_t>(CPPALLY_TYPEOF(args[first_arg]));
-        for (size_t i = 0; i < NumArgs; ++i) {
-            if (ArgToTemplateMap[i] == static_cast<int>(k)) {
-                if (CPPALLY_TYPEOF(args[i]) != static_cast<uint16_t>(runtime_types[k])) {
-                    abort(
-                        "R type: %s for arg %zu does not match the first instance: %s for this template arg",
-                        r_type_to_str(CPPALLY_TYPEOF(args[i])), i + 1,
-                        r_type_to_str(static_cast<uint16_t>(runtime_types[k]))
-                    );
-                }
-            }
+        runtime_types[k] = static_cast<uint32_t>(param_type);
+        if (param_type == NILSXP) {
+            has_undeduced = true;
         }
     }
 
 
     // Linear scan — one indirect call through void*, no inlining possible
-    for (size_t I = 0; I < Total; ++I) {
-        erased_fn_t fn = dispatch_table[I];
-        if (!fn) continue;
-
-
-        bool match = true;
-        for (size_t K = 0; K < NumTemplateParams; ++K) {
-            if (type_table[I][K] != std::numeric_limits<uint32_t>::max() && type_table[I][K] != runtime_types[K]) {
-                match = false;
-                break;
+    auto find_match = [&](bool null_wildcard) -> erased_fn_t {
+        for (size_t I = 0; I < Total; ++I) {
+            erased_fn_t fn = dispatch_table[I];
+            if (!fn) {
+                continue;
+            }
+            bool match = true;
+            for (size_t K = 0; K < NumTemplateParams; ++K) {
+                if (type_table[I][K] == std::numeric_limits<uint32_t>::max()) {
+                    continue;
+                }
+                if (null_wildcard && runtime_types[K] == NILSXP) {
+                    continue;
+                }
+                if (type_table[I][K] != runtime_types[K]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return fn;
             }
         }
-        if (match) return fn(static_cast<void*>(&functor), args);
+        return nullptr;
+    };
+
+
+    if (erased_fn_t fn = find_match(false)) {
+        return fn(static_cast<void*>(&functor), args);
+    }
+    // Second pass so that an r_sexp instantiation, when the constraints admit one,
+    // still claims NULL in pass 1
+    if (has_undeduced) {
+        if (erased_fn_t fn = find_match(true)) {
+            return fn(static_cast<void*>(&functor), args);
+        }
     }
 
 
-    abort("No matching template instantiation found for input types");
+    // Find the first template param whose type no valid instantiation accepts
+    // at that position; if every param is individually acceptable, the types
+    // only fail in combination
+    for (size_t K = 0; K < NumTemplateParams; ++K) {
+        if (runtime_types[K] == NILSXP) {
+            continue;
+        }
+        bool satisfiable = false;
+        for (size_t I = 0; I < Total && !satisfiable; ++I) {
+            satisfiable = dispatch_table[I] != nullptr &&
+                (type_table[I][K] == std::numeric_limits<uint32_t>::max() ||
+                 type_table[I][K] == runtime_types[K]);
+        }
+        if (!satisfiable) {
+            size_t arg = 0;
+            for (size_t i = 0; i < NumArgs; ++i) {
+                if (ArgToTemplateMap[i] == static_cast<int>(K)) {
+                    arg = i;
+                    break;
+                }
+            }
+            abort(
+                "Argument %zu of type %s does not satisfy the template constraints",
+                arg + 1, r_type_to_str(static_cast<SEXPTYPE>(runtime_types[K]))
+            );
+        }
+    }
+    abort("Supplied types do not satisfy the template constraints in combination");
     return nullptr;
 }
 
@@ -389,10 +449,10 @@ SEXP dispatch_template_impl(Functor&& functor, SexpArgs&&... sexp_args) {
 template <auto Fn, typename Ret, typename... Args, size_t... Is>
 SEXP invoke_impl(SEXP* sexp_args, std::index_sequence<Is...>) {
     if constexpr (std::is_void_v<Ret>) {
-        Fn(as<Args>(sexp_args[Is])...);
+        Fn(r_to_cpp<Args>(sexp_args[Is])...);
         return R_NilValue;
     } else {
-        return cpp_to_r(Fn(as<Args>(sexp_args[Is])...));
+        return cpp_to_r(Fn(r_to_cpp<Args>(sexp_args[Is])...));
     }
 }
 

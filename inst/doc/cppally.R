@@ -202,7 +202,7 @@ r_vector<r_dbl> cppally_math(r_dbl x){
     );
 }', 
   cpp_abs = '
-template <RMathType T>
+template <RNumber T>
 [[cppally::register]]
 T cpp_abs(T x){
   if (is_na(x)){

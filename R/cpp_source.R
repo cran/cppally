@@ -260,8 +260,8 @@ cpp_source <- function(file, code = NULL, env = parent.frame(),
                        cxx_std = Sys.getenv("CXX_STD", "CXX20"),
                        dir = tempfile()){
   stop_unless_installed(
-    c("brio", "callr", "cli", "decor",
-      "desc", "glue", "vctrs")
+    c("brio", "callr", "cli", "decor", "desc",
+      "glue", "purrr", "readr", "stringr", "vctrs")
   )
   if (!missing(file) && !file.exists(file)) {
     stop("Can't find `file` at this path:\n", file, "\n", call. = FALSE)
@@ -297,6 +297,7 @@ cpp_source <- function(file, code = NULL, env = parent.frame(),
                       glue::glue('#include "{new_file_name}"'),
                       "using namespace cppally;",
                       "using internal::cpp_to_r;",
+                      "using internal::r_to_cpp;",
                       "using internal::dispatch_template_impl;",
                       cpp_functions_definitions),
                     cpp_path)
@@ -374,6 +375,7 @@ source_single_exprs <- function(exprs, env = parent.frame(), clean = TRUE,
       "#include <utility>",
       "using namespace cppally;",
       "using internal::cpp_to_r;",
+      "using internal::r_to_cpp;",
       eval_helper,
       bodies
     ), collapse = "\n"),

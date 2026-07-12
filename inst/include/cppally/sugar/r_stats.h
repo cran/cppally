@@ -24,9 +24,8 @@ void simd_reduce_add(const r_vec<T>& x, Acc& init, std::invocable<T> auto f) noe
 }
     
 // Very fast integer sum
-template <RMathType T> 
-requires (is<unwrap_t<T>, int>)
-r_dbl sum(const r_vec<T>& x, bool na_rm = false){
+template <RIntegerType T> 
+r_int64 sum(const r_vec<T>& x, bool na_rm = false){
     r_size_t n = x.length();
 
     // Use int64_t since (2^31-1)^2 < INT64_MAX
@@ -37,12 +36,12 @@ r_dbl sum(const r_vec<T>& x, bool na_rm = false){
     } else {
         for (r_size_t i = 0; i < n; ++i){
             if (is_na(x.get(i))){
-                return na<r_dbl>();
+                return na<r_int64>();
             }
             res += static_cast<int_fast64_t>(x.data()[i]);
         }
     }
-    return r_dbl(static_cast<double>(res));
+    return r_int64(static_cast<int64_t>(res));
 }
 
 template <RMathType T> 
@@ -59,10 +58,37 @@ r_dbl sum(const r_vec<T>& x, bool na_rm = false){
             if (is_na(x.get(i))){
                 return na<r_dbl>();
             }
-            out_ += x.data()[i];
+            out_ += unwrap(x.get(i));
         }
     }
     return r_dbl(out_);
+}
+
+template <> 
+inline r_int64 sum(const r_vec<r_int64>& x, bool na_rm){
+    r_size_t n = x.length();
+
+    int128_otherwise_64_t out_ = 0;
+    for (r_size_t i = 0; i < n; ++i){
+        if (is_na(x.get(i))){
+            if (na_rm){
+                continue;
+            } else {
+                return na<r_int64>();
+            }
+        }
+        if constexpr (int128_available){
+            out_ += unwrap(x.get(i));
+        } else {
+            r_int64 temp = r_int64(static_cast<int64_t>(out_)) + x.get(i);
+            out_ = unwrap(temp);
+        }
+    }
+    // [INT64_MIN+1, INT64_MAX] because NA is reserved for INT64_MIN
+    if (out_ > std::numeric_limits<int64_t>::max() || out_ <= std::numeric_limits<int64_t>::min()){
+        return na<r_int64>();
+    }
+    return r_int64(static_cast<int64_t>(out_));
 }
 
 template <RSortableType T>
@@ -186,7 +212,7 @@ r_vec<T> range(const r_vec<T>& x, bool na_rm = false){
 
 template <RMathType T>
 r_dbl mean(const r_vec<T>& x, bool na_rm = false){
-    r_dbl total = sum(x, na_rm);
+    auto total = sum(x, na_rm);
     if (na_rm){
         return total / (x.length() - x.na_count());
     } else {
@@ -211,14 +237,14 @@ r_dbl var(const r_vec<T>& x, bool na_rm = false){
         return na<r_dbl>();
     }
 
-    r_dbl mu = sum(x, na_rm) / N;
+    r_dbl mu = as<r_dbl>(sum(x, na_rm)) / N;
 
     if (is_na(mu)){
         return mu;
     }
     // Sum of squared differences
 
-    r_dbl sum_sq_diff = x.reduce([mu, na_rm](auto acc, auto curr) {
+    r_dbl sum_sq_diff = x.reduce([mu](auto acc, auto curr) {
         r_dbl diff = curr - mu;
         return acc + (diff * diff);
     }, 

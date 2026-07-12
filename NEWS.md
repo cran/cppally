@@ -1,3 +1,84 @@
+# cppally 1.1.0 (2026-07-12)
+
+## Breaking changes
+
+- Improved type-safety regarding implicit coercion of RScalar types. They now
+can implicitly coerce **only** to their wrapped types, whereas before they
+could implicitly coerce to that as well as other C types.
+
+- `RTimeType` arithmetic has been deprecated and removed.
+
+- Arithmetic involving `r_lgl` is now always promoted to `r_int`, matching R's
+own semantics.
+
+- `common_math_t<T, U>` now never returns `r_lgl`, effectively treating `r_lgl` 
+as `r_int`.
+
+## Bug fixes
+
+- Fixed bug where exclusion of concepts header was affecting vignette creation on macos.
+
+- Fixed incorrect NA handling of `r_date` and `r_psxct`. 
+
+- Fixed a bug where `identical()` would return `false` for two genuinely 
+identical `NA_real_` values.
+
+- `NULL` optional arguments are now correctly handled. 
+Vector, factor and data frame arguments can now be `NULL` to allow for optional 
+argument programming from R.
+
+- Fixed a bug where checking exact equality (via `identical`) for C/C++ types 
+was not compiling due to template ordering issue.
+
+## r_lgl (logical) semantics
+
+- `r_lgl` can now implicitly coerce to `int` (and only `int`), consistent with 
+the other RScalar types.
+
+- `r_lgl` values are now always normalised on construction internally to either 
+0, 1, or `NA`.
+
+## Arithmetic
+
+- Integer overflow is now explicitly handled in all cppally arithmetic, returning 
+`NA` when detected. Integer addition and subtraction in particular are 
+written using branchless or vectorisable code, enabling SIMD vectorisation. 
+
+- Integer in-place division `/=` now matches R's `%/%` 
+(floored division), instead of C's truncating division, e.g. `-7L /= 2L` now 
+gives `-4` instead of `-3`. Division by zero or `NA` now correctly returns 
+`NA` instead of crashing the R session. Precision is also preserved for large 
+`r_int64` values that previously round-tripped through `double`.
+
+- Scalar in-place arithmetic that narrows a wider result back to the left-hand 
+type (e.g. `r_int += r_int64`) now checks the value fits first, 
+giving `NA` on overflow instead of a silently wrapped result.
+
+- `%` now accepts mixed integer/float operands (e.g. `r_int(7) % 2.5`), 
+promoting and flooring consistent with R's `%%`.
+
+- Vector in-place arithmetic (`+=`, `-=`, `*=`, `%=`) now routes through the 
+scalar operators, fixing a bug where mixed-width operations (e.g. 
+`r_vec<r_int> += r_vec<r_int64>`) could silently truncate values, including 
+turning `NA` into `0`.
+
+## Improvements
+
+- Better errors when passing invalid types to template functions.
+
+- Constructing invalid dates and date-times now returns `NA` instead of 
+an error.
+
+- New concept `RNumber` to represent number-based types like `r_int` and `r_dbl`.
+
+- New member `is_na` for RScalar types, in addition to the equivalent 
+`is_na` free function.
+
+- New member function `na()` for RScalar classes.
+
+- Relational operators have been extended to cover all RNumericType classes 
+which includes `r_date` and `r_psxct`.
+
 # cppally 1.0.0 (2026-07-02)
 
 First major release. cppally's public API is now considered stable. 

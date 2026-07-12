@@ -1199,9 +1199,9 @@ users to write human-readable templates and constraints.</p>
 <p>When writing your own templates, it is necessary to place them in
 headers for cppally registration to work correctly.</p>
 <p>Let’s practice by creating the <code>abs()</code> function in C++
-using templates and the <code>RMathType</code> concept.</p>
+using templates and the <code>RNumber</code> concept.</p>
 <div class="sourceCode" id="cb110"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb110-1"><a href="#cb110-1" tabindex="-1"></a></span>
-<span id="cb110-2"><a href="#cb110-2" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span>RMathType T<span class="op">&gt;</span></span>
+<span id="cb110-2"><a href="#cb110-2" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span>RNumber T<span class="op">&gt;</span></span>
 <span id="cb110-3"><a href="#cb110-3" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
 <span id="cb110-4"><a href="#cb110-4" tabindex="-1"></a>T cpp_abs<span class="op">(</span>T x<span class="op">){</span></span>
 <span id="cb110-5"><a href="#cb110-5" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>is_na<span class="op">(</span>x<span class="op">)){</span></span>
@@ -1230,10 +1230,10 @@ object’s type, handling each type separately. With our
 of operations.</p>
 <div id="how-it-works" class="section level3">
 <h3>How it works</h3>
-<p>The top-line <code>template &lt;RMathType T&gt;</code> declares a
-template that encapsulates <code>T</code>, an <code>RMathType</code> - a
-concept that contains <code>r_lgl</code>, <code>r_int</code>,
-<code>r_int64</code> and <code>r_dbl</code></p>
+<p>The top-line <code>template &lt;RNumber T&gt;</code> declares a
+template that encapsulates <code>T</code>, an <code>RNumber</code> - a
+concept that contains <code>r_int</code>, <code>r_int64</code> and
+<code>r_dbl</code></p>
 <p>If x is NA then we immediately also return NA via
 <code>na&lt;T&gt;()</code> which is a templated function that returns NA
 of the input type <code>T</code>.</p>
@@ -1402,8 +1402,8 @@ of number of unique values.</p>
 <span id="cb129-7"><a href="#cb129-7" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
 <span id="cb129-8"><a href="#cb129-8" tabindex="-1"></a><span class="co">#&gt;   expression            min   median `itr/sec` mem_alloc `gc/sec`</span></span>
 <span id="cb129-9"><a href="#cb129-9" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt;       &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
-<span id="cb129-10"><a href="#cb129-10" tabindex="-1"></a><span class="co">#&gt; 1 base_n_unique       961µs   2.26ms      441.    1.38MB     11.6</span></span>
-<span id="cb129-11"><a href="#cb129-11" tabindex="-1"></a><span class="co">#&gt; 2 cppally_n_unique    260µs  750.1µs     1386.        0B      0</span></span></code></pre></div>
+<span id="cb129-10"><a href="#cb129-10" tabindex="-1"></a><span class="co">#&gt; 1 base_n_unique       478µs    534µs     1691.    1.38MB     48.3</span></span>
+<span id="cb129-11"><a href="#cb129-11" tabindex="-1"></a><span class="co">#&gt; 2 cppally_n_unique    142µs    162µs     5930.        0B      0</span></span></code></pre></div>
 <p>More useful sugar functions</p>
 <ul>
 <li><p><code>unique()</code> - Like R’s <code>unique()</code> but with a
@@ -1467,13 +1467,20 @@ template argument but is supported when the argument is explicitly an
 <div id="all-core-cppally-concepts" class="section level3">
 <h3>All core cppally concepts</h3>
 <ul>
+<li><p>RNumber - Includes <code>r_int</code>, <code>r_int64</code> and
+<code>r_dbl</code></p></li>
 <li><p>RIntegerType - Includes <code>r_lgl</code>, <code>r_int</code>,
+<code>r_int64</code></p></li>
+<li><p>RIntegerNumber - Includes <code>r_int</code> and
 <code>r_int64</code></p></li>
 <li><p>RMathType - Includes <code>r_lgl</code>, <code>r_int</code>,
 <code>r_int64</code> and <code>r_dbl</code></p></li>
 <li><p>RStringType - Includes <code>r_str</code> and
 <code>r_str_view</code></p></li>
-<li><p>RScalar - Includes all cppally specific scalar types</p></li>
+<li><p>RScalar - Includes <code>r_lgl</code>, <code>r_int</code>,
+<code>r_int64</code>, <code>r_dbl</code>, <code>r_str</code>,
+<code>r_str_view</code>, <code>r_cplx</code>, <code>r_raw</code>,
+<code>r_date</code> and <code>r_psxct</code></p></li>
 <li><p>RVal - Includes anything a cppally vector
 (<code>r_vec&lt;&gt;</code>) can contain: RScalar
 +<code>r_sexp</code></p></li>

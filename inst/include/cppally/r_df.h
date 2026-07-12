@@ -40,6 +40,7 @@ inline r_vec<r_sexp> new_df_impl(int nrows){
 struct r_df {
 
     r_vec<r_sexp> value;
+    using value_type = r_vec<r_sexp>;
 
     private:
 
@@ -102,7 +103,7 @@ struct r_df {
 
         if (value.is_null()) return;
 
-        if (!Rf_isDataFrame(value)) [[unlikely]] {
+        if (!Rf_inherits(value, "data.frame")) [[unlikely]] {
           abort("SEXP must be of class 'data.frame' to be constructed as a data frame");
         }
         r_vec<r_str_view> names = value.names();

@@ -78,54 +78,52 @@ inline r_str max(const r_str& x, const r_str& y){
   }
 }
 
-template <RMathType T>
-T abs(T x) noexcept {
+template <RNumber T>
+constexpr T abs(T x) noexcept {
   return is_na(x) ? x : T{std::abs(unwrap(x))};
 }
-
 template <>
-inline r_dbl abs(r_dbl x) noexcept {
+inline constexpr r_dbl abs(r_dbl x) noexcept {
   return r_dbl(std::abs(unwrap(x)));
 }
+inline constexpr r_int abs(r_lgl x) noexcept {
+  return abs(r_int(unwrap(x)));
+}
 
-template <RMathType T>
-T floor(T x) noexcept {
-  return is_na(x) ? x : T{std::floor(unwrap(x))};
-}
-template<>
-inline r_dbl floor(r_dbl x) noexcept {
-  return r_dbl(std::floor(unwrap(x)));
-}
-template <RIntegerType T>
+template <RNumber T>
 constexpr T floor(T x) noexcept {
-  return x;
+  if constexpr (RIntegerNumber<T>){
+    return x;
+  } else {
+    return is_na(x) ? x : T{std::floor(unwrap(x))};
+  }
+}
+inline constexpr r_int floor(r_lgl x) noexcept {
+  return r_int(unwrap(x));
 }
 
-template <RMathType T>
-T ceiling(T x) noexcept {
-  return is_na(x) ? x : T{std::ceil(unwrap(x))};
-}
-template<>
-inline r_dbl ceiling(r_dbl x) noexcept {
-  return r_dbl(std::ceil(unwrap(x)));
-}
-template <RIntegerType T>
+template <RNumber T>
 constexpr T ceiling(T x) noexcept {
-  return x;
+  if constexpr (RIntegerNumber<T>){
+    return x;
+  } else {
+    return is_na(x) ? x : T{std::ceil(unwrap(x))};
+  }
+}
+inline constexpr r_int ceiling(r_lgl x) noexcept {
+  return r_int(unwrap(x));
 }
 
-template <RMathType T>
-T trunc(T x) noexcept {
-  return is_na(x) ? x : T{std::trunc(unwrap(x))};
-}
-
-template <>
-inline r_dbl trunc(r_dbl x) noexcept {
-  return r_dbl(std::trunc(unwrap(x)));
-}
-template <RIntegerType T>
+template <RNumber T>
 constexpr T trunc(T x) noexcept {
-  return x;
+  if constexpr (RIntegerNumber<T>){
+    return x;
+  } else {
+    return is_na(x) ? x : T{std::trunc(unwrap(x))};
+  }
+}
+inline constexpr r_int trunc(r_lgl x) noexcept {
+  return r_int(unwrap(x));
 }
 
 template <RMathType T>
@@ -135,11 +133,11 @@ constexpr r_int sign(T x) {
 
 template <RMathType T>
 r_dbl sqrt(T x){
-  return r_dbl(std::sqrt(as<r_dbl>(x).value));
+  return r_dbl(std::sqrt(unwrap(as<r_dbl>(x))));
 }
 
 template <MathType T, MathType U>
-  requires (AtLeastOneRMathType<T, U>)
+  requires (RMathType<T> || RMathType<U>)
 r_dbl pow(T x, U y){
   if ((y == r_dbl(0.0)).is_true()){
      return r_dbl(1.0);
@@ -164,8 +162,8 @@ r_dbl exp(T x){
   return r_dbl(std::exp(as<r_dbl>(x).value));
 }
 
-template<MathType T, MathType U>
-requires (AtLeastOneRMathType<T, U>)
+template <MathType T, MathType U>
+requires (RMathType<T> || RMathType<U>)
 r_dbl log(T x, U base){
   return r_dbl(std::log(as<r_dbl>(x)) / std::log(as<r_dbl>(base)));
 }
@@ -173,53 +171,46 @@ template <RMathType T>
 r_dbl log(T x){
   return r_dbl(std::log(as<r_dbl>(x).value));
 }
-inline r_cplx log(r_cplx x){
-  if (is_na(x)){
-    return x;
-  }
-  r_dbl real = r_dbl(0.5 * (log(pow(x.re(), 2.0) + pow(x.im(), 2.0))));
-  r_dbl imag = r_dbl(std::atan2(as<r_dbl>(x.im()), as<r_dbl>(x.re())));
-  return r_cplx{real, imag};
-}
-
 
 template <MathType T, MathType U>
-requires (AtLeastOneRMathType<T, U>)
+requires (RMathType<T> || RMathType<U>)
 r_dbl round(T x, U digits){
   if (is_na(x)){
     return as<r_dbl>(x);
   } else if (is_na(digits)){
     return na<r_dbl>();
-  } else if (identical(x, pos_inf)){
-    return x;
+  } else if (identical(x, pos_inf) || identical(digits, pos_inf)){
+    return as<r_dbl>(x);
   } else if (identical(digits, neg_inf)){
     return r_dbl(0.0);
-  } else if (identical(digits, pos_inf)){
-    return x;
   } else {
     r_dbl scale = r_dbl(std::pow(10.0, as<r_dbl>(digits)));
     return internal::round_to_even(as<r_dbl>(x) * scale) / scale;
   }
 }
 
-template <RMathType T>
+template <RNumber T>
 T round(T x){
-  if (is_na(x)){
-    return x;
-  } else if (identical(abs(x), pos_inf)){ 
+  if constexpr (RIntegerNumber<T>){
     return x;
   } else {
-    return as<T>(internal::round_to_even(as<r_dbl>(x)));
+    if (is_na(x)){
+      return x;
+    } else if (identical(abs(x), pos_inf)){ 
+      return x;
+    } else {
+      return as<T>(internal::round_to_even(as<r_dbl>(x)));
+    }
   }
+
 }
 
-template <RIntegerType T>
-constexpr T round(T x){
-  return x;
+inline constexpr r_int round(r_lgl x){
+  return r_int(unwrap(x));
 }
 
 template <MathType T, MathType U>
-requires (AtLeastOneRMathType<T, U>)
+requires (RMathType<T> || RMathType<U>)
 r_dbl signif(T x, U digits){
   as_r_scalar_t<U> new_digits = max(as_r_scalar_t<U>(1), as<as_r_scalar_t<U>>(digits));
   if (is_na(x)){
@@ -235,14 +226,14 @@ r_dbl signif(T x, U digits){
   }
 }
 
-inline r_lgl is_whole_number(r_dbl x, r_dbl tolerance){
+inline r_lgl is_whole_number(r_dbl x, r_dbl tolerance = sqrt(r_limits<r_dbl>::epsilon())){
   return abs(x - round(x)) <= tolerance;
 }
 
 
 // Greatest common divisor
-template <RMathType T>
-T gcd(T x, T y, bool na_rm = false, T tol = r_limits<T>::tolerance()){
+template <RNumber T>
+T gcd(T x, T y, T tol = r_limits<T>::tolerance()) noexcept {
 
   using unwrapped_t = unwrap_t<T>;
 
@@ -253,18 +244,14 @@ T gcd(T x, T y, bool na_rm = false, T tol = r_limits<T>::tolerance()){
   unwrapped_t ay_ = unwrap(ay);
   unwrapped_t tol_ = unwrap(tol);
 
-  if constexpr (RIntegerType<T>){
+  if constexpr (RIntegerNumber<T>){
 
     if (identical(ax, T(1)) || identical(ay, T(1))){
       return T(1);
     }
 
-    if (is_na(ax) || is_na(ay)){
-      if (na_rm){
-        return coalesce(ax, ay);
-      } else {
-        return na<T>();
-      }
+    if (internal::either_na(x, y)){
+      return na<T>();
     }
 
     // Taken from number theory lecture notes
@@ -292,12 +279,8 @@ T gcd(T x, T y, bool na_rm = false, T tol = r_limits<T>::tolerance()){
     return T(ax_);
   } else {
 
-    if (is_na(ax) || is_na(ay)){
-      if (na_rm){ 
-        return coalesce(ax, ay);
-      } else {
-        return na<T>();
-      }
+    if (internal::either_na(x, y)){
+      return na<T>();
     }
 
     // GCD(0,0)=0
@@ -323,10 +306,15 @@ T gcd(T x, T y, bool na_rm = false, T tol = r_limits<T>::tolerance()){
   }
 }
 
+inline r_int gcd(r_lgl x, r_lgl y, r_lgl tol = r_limits<r_lgl>::tolerance()) noexcept {
+  return gcd(r_int(unwrap(x)), r_int(unwrap(y)), r_int(unwrap(tol)));
+}
+
 
 // Lowest common multiple
-template <RMathType T>
-T lcm(T x, T y, bool na_rm = false, T tol = r_limits<T>::tolerance()){
+// LCM(x, y) = (|x| / GCD(x, y)) * |y|
+template <RNumber T>
+T lcm(T x, T y, T tol = r_limits<T>::tolerance()) noexcept {
 
   T ax = abs(x);
   T ay = abs(y);
@@ -335,29 +323,17 @@ T lcm(T x, T y, bool na_rm = false, T tol = r_limits<T>::tolerance()){
     return T(0);
   }
 
-  if (is_na(x) || is_na(y)){
-    if (na_rm){
-      return coalesce(ax, ay);
-    } else {
-      return na<T>();
-    }
+  if (internal::either_na(x, y)){
+    return na<T>();
   }
 
-  using unwrapped_t = unwrap_t<T>;
+  T out = ax;
+  out /= gcd(ax, ay, tol);
+  return out * ay;
+}
 
-  // Use unwrapped values so that `/` preserves integer types so we don't lose precision for large values
-  // Since by definition GCD(a, b) always produces a number that exactly divides both a b (no fractions)
-  // this is well-defined
-  unwrapped_t res = unwrap(ax) / unwrap(gcd(ax, ay, false, tol));
-
-  // Check for overflow
-  if constexpr (RIntegerType<T>){
-    if ( res > (unwrap(r_limits<T>::max()) / unwrap(ay)) ) [[unlikely]] {
-      abort("lcm: Integer overflow detected");
-    }
-  }
-
-  return T(res * unwrap(ay));
+inline r_int lcm(r_lgl x, r_lgl y, r_lgl tol = r_limits<r_lgl>::tolerance()) noexcept {
+  return lcm(r_int(unwrap(x)), r_int(unwrap(y)), r_int(unwrap(tol)));
 }
 
 

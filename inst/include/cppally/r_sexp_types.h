@@ -45,7 +45,7 @@ inline SEXPTYPE CPPALLY_TYPEOF(SEXP x) noexcept {
         return xtype;
     }
     case VECSXP: {
-        if (Rf_isDataFrame(x)) return CPPALLY_DFSXP;
+        if (Rf_inherits(x, "data.frame")) return CPPALLY_DFSXP;
         return xtype;
     }
     default: {
@@ -57,11 +57,11 @@ inline SEXPTYPE CPPALLY_TYPEOF(SEXP x) noexcept {
 inline const char* r_type_to_str(SEXPTYPE x){
 
     switch (x){
-    case CPPALLY_INT64SXP: return "CPPALLY_INT64SXP";
-    case CPPALLY_REALDATESXP: return "CPPALLY_REALDATESXP";
-    case CPPALLY_REALPSXTSXP: return "CPPALLY_REALPSXTSXP";
-    case CPPALLY_FCTSXP: return "CPPALLY_FCTSXP";
-    case CPPALLY_DFSXP: return "CPPALLY_DFSXP";
+    case CPPALLY_INT64SXP: return "integer64";
+    case CPPALLY_REALDATESXP: return "date (double storage)";
+    case CPPALLY_REALPSXTSXP: return "date-time (double storage)";
+    case CPPALLY_FCTSXP: return "factor";
+    case CPPALLY_DFSXP: return "data frame";
     default: return Rf_type2char(x);
     }
 }

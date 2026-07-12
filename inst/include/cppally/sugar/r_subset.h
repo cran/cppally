@@ -70,14 +70,15 @@ r_vec<V> clean_locs(const r_vec<U>& locs, const T& x){
 
   if constexpr (RStringType<U>){
 
-    static_assert(!is<V, r_int64>, "Cannot perform named-subsetting on long vectors");
+    // static_assert(!is<V, r_int64>, "Cannot perform named-subsetting on long vectors");
     static_assert(!is<T, r_df>, "Named-subsetting of r_df is unsupported, use `r_df.select()`");
 
     if (x.names().is_null()){
       abort("Cannot subset on the names of an unnamed vector");
     }
 
-    std::vector<int> matches;
+    // Long-vector name lookup is caught at runtime by name_index/name hashing.
+    std::vector<unwrap_t<V>> matches;
     matches.reserve(n);
 
     for (r_size_t i = 0; i < n; ++i){
@@ -86,7 +87,7 @@ r_vec<V> clean_locs(const r_vec<U>& locs, const T& x){
         matches.push_back(unwrap(name_idx));
       }
     }
-    return as<r_vec<r_int>>(matches);
+    return as<r_vec<V>>(matches);
   } else if constexpr (RLogicalType<U>){
     if (locs.length() != xn) [[unlikely]] {
       abort("length of indices must match vector length when indices is `r_vec<r_lgl>`");
@@ -100,7 +101,7 @@ r_vec<V> clean_locs(const r_vec<U>& locs, const T& x){
     valid_indices.reserve(n);
 
     for (r_size_t i = 0; i < n; ++i){
-      unsigned_int_t loc = static_cast<unsigned_int_t>(locs.data()[i]);
+      unsigned_int_t loc = static_cast<unsigned_int_t>(unwrap(locs.get(i)));
       if (loc < static_cast<unsigned_int_t>(xn)){
         valid_indices.push_back(static_cast<unwrap_t<V>>(loc));
       }
@@ -159,7 +160,7 @@ inline r_vec<T> r_vec<T>::subset(const r_vec<U>& indices, bool invert, bool chec
       unsigned_int_t j;
   
       for (r_size_t i = 0; i < n; ++i){
-        j = indices.data()[i];
+        j = unwrap(indices.get(i));
         if (j < static_cast<unsigned_int_t>(xn)){
           out.set(i, view(static_cast<r_size_t>(j)));
         } else if (j > na_val) [[unlikely]] {
@@ -173,7 +174,7 @@ inline r_vec<T> r_vec<T>::subset(const r_vec<U>& indices, bool invert, bool chec
       }
     } else {
       for (r_size_t i = 0; i < n; ++i){
-        out.set(i, view(static_cast<r_size_t>(indices.data()[i])));
+        out.set(i, view(static_cast<r_size_t>(unwrap(indices.get(i)))));
     }
   }
   r_vec<r_str_view> nms = names();
