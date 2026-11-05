@@ -1,0 +1,1428 @@
+#ifndef CPPALLY_R_VECTOR2_H
+#define CPPALLY_R_VECTOR2_H
+
+#include <cppally/r_setup.h>
+#include <cppally/r_concepts.h>
+#include <cppally/utils.h>
+#include <cppally/scalar/r_limits.h>
+#include <cppally/scalar/arithmetic_ops.h>
+#include <cppally/scalar/relational_ops.h>
+#include <cppally/na.h>
+#include <cppally/scalar/coerce_scalars.h>
+#include <cppally/vector/vector_utils.h>
+#include <cppally/vector/vector_names.h>
+#include <cppally/r_function.h>
+#include <cppally/identical.h>
+#include <cppally/named_arg.h>
+#include <algorithm>
+#include <cstring>
+#include <utility>
+#include <initializer_list>
+
+namespace cppally {
+
+// Forward declarations
+
+template <RVector T>
+inline void r_copy_n(T& target, const T& source, r_size_t target_offset, r_size_t n);
+  
+namespace internal {
+
+// RScalar -> RVector
+// Everything else -> r_sexp
+template <typename T>
+r_sexp as_list_element(const T& x) {
+    if constexpr (CastableToRScalar<T>){
+      using data_t = as_r_scalar_t<T>;
+      return r_sexp(r_vec<data_t>({ data_t(x) }));
+    } else if constexpr (std::is_constructible_v<r_sexp, const T&>){
+      return r_sexp(x);
+    } else {
+      return as<r_sexp>(x);
+    }
+}
+
+// variadic pairlist construction
+template<typename... Args>
+inline r_sexp make_pairlist(Args... args) {
+  constexpr int n = sizeof...(args);
+
+  if constexpr (n == 0){
+    return r_sexp(safe[Rf_allocList](0));
+  } else {
+    r_sexp out = r_sexp(safe[Rf_allocList](n));
+
+    SEXP current = out;
+
+    (([&]() {
+      if constexpr (NamedArg<Args>) {
+        SETCAR(current, as_list_element(args.value));
+        // Named element only if name is not empty string
+        if (args.name && args.name[0] != '\0'){
+          SET_TAG(current, r_sym(args.name));
+        }
+      } else {
+        SETCAR(current, as_list_element(args));
+      }
+      current = CDR(current);
+    }()), ...);
+
+    return out;
+  }
+}
+
+// Internal unsafe constructors when we are reconstructing the value from its unwrapped value
+// Useful for avoiding re-checking SEXP types like for CHARSXP, where r_str(CHARSXP) would by default check that 
+// TYPEOF satisfies CHARSXP
+
+// the _view version is to avoid re-protecting underlying SEXP when it will immediately be protected by its parent vector
+
+template <RVal T, typename U>
+requires (is<unwrap_t<T>, U> && std::is_constructible_v<T, const U&, internal::view_tag, internal::no_checks_tag>)
+constexpr T unsafe_reconstruct_view(const U& x) noexcept {
+  // This must always be nothrow constructible as it is used in omp simd loops
+  static_assert(std::is_nothrow_constructible_v<T, const U&, internal::view_tag, internal::no_checks_tag>);
+  return T(x, internal::view_tag{}, internal::no_checks_tag{});
+}
+
+template <RVal T, typename U>
+requires (is<unwrap_t<T>, U> && !std::is_constructible_v<T, const U&, internal::view_tag, internal::no_checks_tag>)
+constexpr T unsafe_reconstruct_view(const U& x) noexcept(
+  std::is_constructible_v<T, const U&, internal::view_tag>
+  ? std::is_nothrow_constructible_v<T, const U&, internal::view_tag>
+  : std::is_nothrow_constructible_v<T, const U&>
+) {
+  if constexpr (std::is_constructible_v<T, const U&, internal::view_tag>){
+    return T(x, internal::view_tag{});
+  } else {
+    return T(x);
+  }
+}
+
+// No checks (like SEXP type checking)
+template <RVal T, typename U>
+requires (is<unwrap_t<T>, U> && std::is_constructible_v<T, const U&, internal::no_checks_tag>)
+constexpr T unsafe_reconstruct(const U& x) noexcept(std::is_nothrow_constructible_v<T, const U&, internal::no_checks_tag>) {
+  return T(x, internal::no_checks_tag{});
+}
+
+template <RVal T, typename U>
+requires (is<unwrap_t<T>, U> && !std::is_constructible_v<T, const U&, internal::no_checks_tag>)
+constexpr T unsafe_reconstruct(const U& x) noexcept(std::is_nothrow_constructible_v<T, const U&>){
+  return T(x);
+}
+
+// Concept helpers for location-based subset helpers
+template <typename T>
+concept RSubscript = any<T, r_lgl, r_int, r_int64, r_str_view, r_str>;
+
+template <typename T>
+concept RNumericSubscript = any<T, r_int, r_int64>;
+
+// break signal for short-circuiting folds (see `r_vec::reduce`) - done(x) stops the fold
+template <typename Acc>
+struct control_flow {
+  using value_type = Acc;
+  Acc value;
+  bool stop = false;
+  control_flow(Acc v) : value(std::move(v)) {}              // bare value = continue
+  control_flow(Acc v, bool s) : value(std::move(v)), stop(s) {}
+};
+template <typename R> struct fold_result                 { using acc = R; static constexpr bool stops = false; };
+template <typename A> struct fold_result<control_flow<A>> { using acc = A; static constexpr bool stops = true;  };
+
+}
+
+template <typename Acc>
+internal::control_flow<Acc> done(Acc v){ return { std::move(v), true }; }
+template <typename Acc>
+internal::control_flow<Acc> keep(Acc v){ return { std::move(v), false }; }
+
+
+template <typename... Args>
+r_sexp r_function::operator()(Args&&... args) const {
+  return call_impl(internal::make_pairlist(std::forward<Args>(args)...));
+}
+
+#ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+  struct resizable {};
+#endif
+
+template <RVal T>
+struct r_vec {
+
+  r_sexp value;
+  using value_type = r_sexp;
+  using data_type = std::remove_cvref_t<T>;
+
+  private:
+
+  r_size_t m_length = 0;
+
+  #ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+    r_size_t m_capacity = -1; // < 0 means not resizable
+  #endif
+
+  void initialise_length_and_capacity() noexcept {
+    m_length = Rf_xlength(value);
+    #ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+      if (R_isResizable(value)){
+        m_capacity = R_maxLength(value);
+      }
+    #endif
+  }
+
+  // Initialise data (pointer) to:
+  // const SEXP* (read-only) - If T is a type convertible to SEXP
+  // unwrap_t<T>* - Otherwise
+  static constexpr bool is_write_barrier_protected = is<unwrap_t<T>, SEXP>;
+  using ptr_t = std::conditional_t<is_write_barrier_protected, const SEXP*, unwrap_t<T>*>;
+#ifdef CPPALLY_PRESERVE_ALTREP
+  // `mutable` so that lazy materialisation for ALTREP inputs can happen
+  // For non-ALTREP this is a one-shot init at construction
+  mutable ptr_t m_data = nullptr;
+#else
+  ptr_t m_data = nullptr;
+#endif
+
+  // Names caching strategy
+  // 1. If we have to get or set the names (via Rf_getAttrib/Rf_setAttrib), we might as well also cache them at that moment (including r_null).
+  // 2. Once the cache is populated, it becomes a secondary source of truth
+  // and is assumed to be in sync with the SEXP's names attribute.
+  // The only way to violate this sync is via R C API calls which are absolutely not safe.
+  // 3. Hashing is separate to caching and is only done on 2nd-lookup via `name_index()`
+  // Any two r_vec wrappers around the same SEXP point to the same names_map via the registry
+  mutable internal::names_map::ptr cached_names;
+
+  void initialise_data_pointer(){
+#ifdef CPPALLY_PRESERVE_ALTREP
+    // For ALTREP leave m_data null so get/view go through elt<T>
+    // data() will materialise on first call
+    if (is_altrep()) return;
+#endif
+    if constexpr (is_write_barrier_protected){
+      m_data = is_altrep() ? safe[internal::vector_ptr_ro<T>](value) : internal::vector_ptr_ro<T>(value);
+    } else {
+      m_data = is_altrep() ? safe[internal::vector_ptr<T>](value) : internal::vector_ptr<T>(value);
+    }
+  }
+
+  // By default do nothing (e.g. for vectors with no attrs)
+  template <typename U>
+  constexpr void validate_class() const noexcept {}
+
+  template <RDateType U>
+  void validate_class() const {
+    if (!Rf_inherits(value, "Date")) [[unlikely]] {
+      abort("SEXP must be of class 'Date'");
+    }
+  }
+
+  template <RPsxctType U>
+  void validate_class() const {
+    if (!Rf_inherits(value, "POSIXct")) [[unlikely]] {
+      abort("SEXP must inherit class 'POSIXct'");
+    }
+  }
+
+  void CPPALLY_NOINLINE copy_to_make_exclusive() {
+    r_vec<T> new_vec = copy();
+    *this = std::move(new_vec);
+  }
+
+  public:
+
+  // ----- Constructors -----
+
+  // Construct new r_vec of length n
+  template <CppIntegerNumber N>
+  explicit r_vec(N n) : value(internal::new_vec_impl<data_type>(static_cast<r_size_t>(n))),
+                        m_length(static_cast<r_size_t>(n))
+  #ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+                        , m_capacity(-1)
+  #endif
+  {
+    initialise_data_pointer();
+  }
+
+  #ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+    // Resizable vector of length n and capacity n
+    template <CppIntegerNumber N>
+    explicit r_vec(N n, resizable) : value(internal::new_vec_impl<data_type>(static_cast<r_size_t>(n), true)),
+                                     m_length(static_cast<r_size_t>(n)),
+                                     m_capacity(static_cast<r_size_t>(n)) {
+      initialise_data_pointer();
+    }
+
+    // Resizable vector of length n and capacity >= n
+    template <CppIntegerNumber N>
+    explicit r_vec(N n, resizable, r_size_t capacity) : r_vec(std::max(static_cast<r_size_t>(n), capacity), resizable{}){
+      r_size_t len = static_cast<r_size_t>(n);
+      if (len < 0) [[unlikely]] {
+        abort("`r_vec()`: `n` must be >= 0");
+      }
+      R_resizeVector(value, len);
+      m_length = len;
+    }
+  #endif
+
+  // Construct new r_vec of length n filled with default value
+  template <CppIntegerNumber N>
+  explicit r_vec(N n, const T& default_value) : r_vec(n){
+    fill(r_size_t{0}, static_cast<r_size_t>(n), default_value);
+  }
+  
+  r_vec() : r_vec(r_size_t(0)){}
+
+  // Construct r_vector from r_sexp
+  explicit r_vec(r_sexp s) : value(std::move(s)) {
+    if (!is_null()) {
+      internal::check_valid_storage<r_vec<T>>(value);
+      validate_class<T>();
+      initialise_length_and_capacity();
+      initialise_data_pointer();
+    }
+  }
+
+  explicit r_vec(SEXP s) : r_vec(r_sexp(s)) {}
+  explicit r_vec(SEXP s, internal::view_tag) : r_vec(r_sexp(s, internal::view_tag{})) {}
+
+  // Unchecked constructors: skip type and class validation
+  // For use where the SEXP type is already established (e.g. r_visit.h dispatchers)
+  explicit r_vec(r_sexp s, internal::no_checks_tag) : value(std::move(s)) {
+    if (!is_null()){
+      initialise_length_and_capacity();
+      initialise_data_pointer();
+    }
+  }
+  explicit r_vec(SEXP s, internal::view_tag, internal::no_checks_tag) : r_vec(r_sexp(s, internal::view_tag{}), internal::no_checks_tag{}){}
+
+  explicit r_vec(std::initializer_list<T> elements) : r_vec(static_cast<r_size_t>(elements.size())) {
+    
+    r_size_t i = 0;
+    for (const auto& elem : elements) {
+      set(i++, elem);
+    }
+
+  }
+
+  explicit r_vec(std::initializer_list<internal::named_arg<T>> elements) : r_vec(static_cast<r_size_t>(elements.size())) {
+
+    r_vec<r_str> nms(static_cast<r_size_t>(elements.size()));
+
+    r_size_t i = 0;
+    for (const auto& [name, val] : elements) {
+      set(i, val);
+      nms.set(i, r_str(name));
+      ++i;
+    }
+    set_names(nms);
+
+  }
+
+  // Stop construction where TYPEOF(x) != TYPEOF(y)
+  template <typename V>
+  requires (RVector<V> && internal::r_typeof<V> != internal::r_typeof<r_vec<T>>)
+  r_vec(const V&) = delete;
+
+  // Implicit conversion to SEXP
+  operator SEXP() const noexcept {
+    return value.value;
+  }
+
+  // Explicit conversion to r_sexp
+  explicit operator r_sexp() const noexcept {
+    return value;
+  }
+
+  // ----- Predicates -----
+
+  bool is_null() const noexcept {
+    return value.is_null();
+  }
+
+  bool is_altrep() const noexcept {
+    return value.is_altrep();
+  }
+
+#ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+  bool is_resizable() const noexcept {
+    return m_capacity >= 0;
+  }
+#endif
+
+  // Is this the only r_vec holding this r_sexp?
+  bool is_exclusive() const noexcept {
+    return value.is_exclusive();
+  }
+
+  // Has data been materialised?
+  // Will only have been materialised if data ptr has been assigned
+  bool is_materialised() const noexcept {
+    return static_cast<bool>(m_data); 
+  }
+  // Deprecated - use `is_materialised()`
+  [[deprecated("use `is_materialised()`")]] bool materialised() const noexcept {
+    return static_cast<bool>(m_data); 
+  }
+
+  // Materialise data. It's a no-op for already materialised vectors.
+  void materialise() const {
+    static_cast<void>(data());
+  }
+
+  #ifdef CPPALLY_PRESERVE_ALTREP
+  // Direct data access - materialises data for ALTREP vectors.
+  // `get()`, `view()` and `set()` are preferred.
+  // Logically const: may lazily fill the mutable m_data cache, so not thread-safe until materialised.
+  ptr_t data() const {
+    if (!is_materialised()) [[unlikely]] {
+      if (is_null()){
+        return m_data;
+      }
+      if constexpr (is_write_barrier_protected) {
+        m_data = safe[internal::vector_ptr_ro<T>](*this);
+      } else {
+        m_data = safe[internal::vector_ptr<T>](*this);
+      }
+    }
+    return m_data;
+  }
+  #else
+  // Direct data access - `get()`, `view()` and `set()` are preferred.
+  ptr_t data() const noexcept {
+    return m_data;
+  }
+  #endif
+
+  // Vector length
+  r_size_t length() const noexcept {
+    return m_length;
+  }
+
+#ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+  // Capacity of vector - always >= length()
+  r_size_t capacity() const noexcept {
+    return is_resizable() ? m_capacity : m_length;
+  }
+#endif
+
+  // Is vector length >= 2^31?
+  bool is_long() const noexcept {
+    return length() > unwrap(r_limits<r_int>::max());
+  }
+
+  // Is vector empty (i.e. length == 0)?
+  bool is_empty() const noexcept {
+    return length() == 0;
+  }
+
+  // SEXP memory address
+  r_str address() const {
+    return value.address();
+  }
+
+  // ----- Copy-on-modify -----
+
+  // data is copied but attributes are shallow copied, matching Rf_shallow_duplicate.
+  [[nodiscard]] r_vec<T> copy() const {
+    if (is_null()){
+      return *this;
+    }
+    r_size_t n = length();
+    #ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+        // Keep capacity for resizable vectors
+        r_vec<T> new_vec = is_resizable() ? r_vec<T>(n, resizable{}, capacity()) : r_vec<T>(n);
+    #else
+        r_vec<T> new_vec(n);
+    #endif
+
+    #if defined(CPPALLY_PRESERVE_ALTREP)
+    r_copy_n(new_vec, *this, 0, n);
+    #else
+    // Special case - use memcpy for CHARSXP
+    // Should be safe because every copied element was allocated before new_vec
+    using primitive_t = unwrap_t<T>;
+      if constexpr (RStringType<T>){
+        std::memmove(const_cast<primitive_t*>(new_vec.data()), data(), n * sizeof(primitive_t)); 
+      } else {
+        r_copy_n(new_vec, *this, 0, n);
+      }
+    #endif
+
+    safe[SHALLOW_DUPLICATE_ATTRIB](new_vec, *this);
+    return new_vec;
+  }
+
+  // Makes vector exclusive (if it isn't already) by creating a new copy of the data.
+  void ensure_exclusive() {
+    if (!is_exclusive()) [[unlikely]] {
+      copy_to_make_exclusive();
+    }
+  }
+
+  // Runs ensure_exclusive() only when CPPALLY_COPY_ON_MODIFY is enabled
+  // Only needed when writing via `data()` - call it before writing (if you want to respect copy-on-modify builds).
+  void maybe_ensure_exclusive() {
+    #ifdef CPPALLY_COPY_ON_MODIFY
+    ensure_exclusive();
+    #endif
+  }
+
+  // Replace attributes of *this with a shallow copy of source's.
+  // If *this is r_null then it is converted into a vector only if source has attributes.
+  template <RVal U>
+  void copy_attrs_from(const r_vec<U>& source) {
+  
+    if (!has_attrs(source) && !has_attrs(*this)){
+      return;
+    }
+
+    if (is_null()) [[unlikely]] {
+      *this = r_vec<T>();
+    }
+
+    maybe_ensure_exclusive();
+    auto old = internal::get_core_attrs<r_vec<T>>(*this);
+    safe[SHALLOW_DUPLICATE_ATTRIB](*this, source);
+    internal::restore_core_attrs<r_vec<T>>(*this, old);
+    invalidate_names_cache();
+
+    if (auto sp = internal::levels_cache().try_lookup(*this)) [[unlikely]] {
+      sp->invalidate();
+    }
+  }
+
+  // ----- Names -----
+
+  private:
+
+  void invalidate_names_cache() noexcept {
+    if (cached_names) {
+      cached_names->invalidate();
+    } else if (auto sp = internal::name_cache().try_lookup(*this)) [[unlikely]] {
+      // If a sibling has cached names, adopt then invalidate the cache for all siblings
+      cached_names = internal::names_map::ptr(sp);
+      cached_names->invalidate();
+    }
+  }
+
+  // Place names into cache (no hash map yet)
+  void cache_names(const r_vec<r_str_view>& nms) const {
+    if (!cached_names){
+      cached_names = internal::name_cache().get_or_create(unwrap(*this));
+    }
+    cached_names->names.emplace(static_cast<r_sexp>(nms));
+  }
+
+  bool has_cached_names() const noexcept {
+    return cached_names && cached_names->names.has_value();
+  }
+
+  // Cache unless we hold a populated cache
+  void ensure_names_cached() const {
+    if (has_cached_names()){
+      return;
+    }
+    cache_names(r_vec<r_str_view>(Rf_getAttrib(*this, cached_sym<"names">())));
+  }
+
+  public:
+
+  // Vector names
+  r_vec<r_str_view> names() const {
+    ensure_names_cached();
+    return r_vec<r_str_view>(*cached_names->names, internal::no_checks_tag{});
+  }
+
+  // Does vector have names?
+  bool has_names() const {
+    return !names().is_null();
+  }
+
+  // Replace vector names with new names.
+  template <RStringType U>
+  void set_names(const r_vec<U>& names){
+
+    // If we have cached names AND the new names share the same address as the cached names
+    // then skip names-setting
+    if (has_cached_names() && unwrap(names) == unwrap(*cached_names->names)){
+      return;
+    }
+      
+    bool removing = names.is_null();
+
+    if (!removing && names.length() != length()) [[unlikely]] {
+      abort("`length(names)` must equal `length(x)`");
+    }
+
+    // Removing names from an unnamed vector - return early, no copy needed
+    if (removing && !has_names()){
+      return;
+    }
+
+    // Ensure vector is exclusive referencer if COM is enabled
+    maybe_ensure_exclusive();
+
+    if (removing){
+      Rf_setAttrib(*this, cached_sym<"names">(), r_null);
+    } else {
+      Rf_namesgets(*this, names);
+    }
+
+    invalidate_names_cache();
+    // Re-get the attribute because we can't know if Rf_namesgets() copied the SEXP 
+    cache_names(r_vec<r_str_view>(r_sexp(Rf_getAttrib(*this, cached_sym<"names">())), internal::no_checks_tag{}));
+  }
+
+  // Remove vector names.
+  void clear_names() {
+    set_names(r_null);
+  }
+
+  // For named vectors: find first index of name
+  // `abort_on_missing` - When supplied name doesn't exist, abort, otherwise return `NA`
+  r_int name_index(r_str_view name, bool abort_on_missing = true) const {
+
+    ensure_names_cached();
+
+    if (cached_names->names->is_null()) [[unlikely]] {
+      abort("`name_index()`: Vector has no names");
+    }
+
+    // Second-or-later lookup - cache hash map
+    if (cached_names->accessed) {
+      r_int index = cached_names->find(name);
+      if (is_na(index)){ 
+        if (abort_on_missing) {
+          abort("%s: There is no element named '%s'", __func__, name.c_str());
+        } else {
+          return na<r_int>();
+        }
+      }
+      return index;
+    }
+
+    cached_names->accessed = true;
+
+    // First lookup: linear scan, no hash-table allocation
+    r_vec<r_str_view> names_attr = names();
+    r_int64 out = names_attr.find_first(name);
+    if (abort_on_missing && out.is_na()) [[unlikely]] {
+      abort("%s: There is no element named '%s'", __func__, name.c_str());
+    }
+    return internal::coerce_number<r_int>(out);
+  }
+
+  r_int name_index(const char* name, bool abort_on_missing = true) const {
+    return name_index(r_str(name), abort_on_missing);
+  }
+
+  // ----- Element access -----
+
+  
+  #ifdef CPPALLY_PRESERVE_ALTREP
+  // Get element by index (no bounds-check)
+  template <IntegerNumber I>
+  T get(I index) const {
+    unwrap_t<I> i = unwrap(index);
+    return internal::unsafe_reconstruct<T>(is_materialised() ? m_data[i] : internal::elt<T>(*this, i));
+  }
+  #else
+  // Get element by index (no bounds-check)
+  template <IntegerNumber I>
+  T get(I index) const noexcept(noexcept(internal::unsafe_reconstruct<T>(m_data[unwrap(index)]))) {
+    return internal::unsafe_reconstruct<T>(m_data[unwrap(index)]);
+  }
+  #endif
+  
+  // Get element by name
+  T get(r_str_view name) const {
+    return get(static_cast<r_size_t>(unwrap(name_index(name))));
+  }
+
+  // Get element by name
+  T get(const char* name) const {
+    return get(r_str(name));
+  }
+
+  #ifdef CPPALLY_PRESERVE_ALTREP
+  // View element (like `get()` but elements must be short-lived)
+  // Element must not outlive the parent vector
+  template <IntegerNumber I>
+  T view(I index) const {
+    unwrap_t<I> i = unwrap(index);
+    return internal::unsafe_reconstruct_view<T>(is_materialised() ? m_data[i] : internal::elt<T>(*this, i));
+  }
+  #else
+  // View element (like `get()` but elements must be short-lived)
+  // Element must not outlive the parent vector
+  template <IntegerNumber I>
+  T view(I index) const noexcept(noexcept(internal::unsafe_reconstruct_view<T>(m_data[unwrap(index)]))) {
+    return internal::unsafe_reconstruct_view<T>(m_data[unwrap(index)]);
+  }
+  #endif
+
+  T view(r_str_view name) const {
+    return view(static_cast<r_size_t>(unwrap(name_index(name))));
+  }
+
+  T view(const char* name) const {
+    return view(r_str(name));
+  }
+
+  // Set element (no bounds-check)
+  template <IntegerNumber I>
+  void set(I index, const T& val) noexcept(
+
+    // If CPPALLY_PRESERVE_ALTREP is defined then data() may materialise and throw
+    // If CPPALLY_COPY_ON_MODIFY is defined then ensure_exclusive() may also materialise and throw
+
+    #if defined(CPPALLY_COPY_ON_MODIFY) || defined(CPPALLY_PRESERVE_ALTREP)
+    false
+    #else
+    !is_write_barrier_protected
+    #endif
+  ) {
+    maybe_ensure_exclusive();
+    if constexpr (RStringType<T>){
+      SET_STRING_ELT(*this, unwrap(index), unwrap(val));
+    } else if constexpr (is<T, r_sexp>){
+      SET_VECTOR_ELT(*this, unwrap(index), unwrap(val));
+    } else {
+      static_assert(!is_write_barrier_protected, "Can't write data directly here, data is R write-barrier protected");
+      data()[unwrap(index)] = unwrap(val);
+    }
+  }
+
+  template <IntegerNumber I, typename U>
+  void set(I index, const U& val) {
+    maybe_ensure_exclusive();
+    // Lists must not hold RScalar, only RComposite (e.g. vectors) and other SEXP types
+    if constexpr (is<T, r_sexp>) {
+      set(index, internal::as_list_element(val));
+    } else {
+      set(index, as<T>(val));
+    }
+  }
+
+  // Set element by vector name
+  void set(r_str_view name, const T& val) {
+      set(static_cast<r_size_t>(unwrap(name_index(name))), val);
+  }
+  // Set element by vector name
+  void set(const char* name, const T& val) {
+      set(r_str(name), val);
+  }
+
+  // First value of vector - abort if empty.
+  T front() const {
+    if (is_empty()) [[unlikely]] {
+      abort("`front()`: vector is empty");
+    }
+    return get(r_size_t(0));
+  }
+  // Last value of vector - abort if empty.
+  T back() const {
+    if (is_empty()) [[unlikely]] {
+      abort("`back()`: vector is empty");
+    }
+    return get(length() - 1);
+  }
+
+  // ----- Apply -----
+
+  private:
+
+  // Core engine: fn(index, value) -> set onto target[i]. All map/apply variants use this
+  template <bool simd = false, bool parallel = false, RVal U>
+  void map_impl(r_vec<U>& target, std::invocable<r_size_t, T> auto fn) const {
+
+    #define CPPALLY_DO_APPLY for (r_size_t i = 0; i < n; ++i) p_target[i] = unwrap(fn(i, internal::unsafe_reconstruct_view<T>(p_x[i])));
+
+    r_size_t n = length();
+
+    if (target.length() != n) [[unlikely]] {
+      abort("map: target length must match source length");
+    }
+
+    if constexpr (RVectorisable<T> && RVectorisable<U> && (simd || parallel)){
+
+      // No RESTRICT: callers pass *this as target, so these two alias by design
+      const auto* p_x = data();
+      auto* p_target = target.data();
+
+      if constexpr (parallel){
+        const int n_threads = internal::calc_threads(n);
+        if constexpr (simd){
+          if (n_threads > 1){
+            OMP_PARALLEL_FOR_SIMD(n_threads)
+            CPPALLY_DO_APPLY
+          } else {
+            OMP_SIMD
+            CPPALLY_DO_APPLY
+          }
+        } else {
+          if (n_threads > 1){
+            OMP_PARALLEL_FOR(n_threads)
+            CPPALLY_DO_APPLY
+          } else {
+            CPPALLY_DO_APPLY
+          }
+        }
+      } else if constexpr (simd){
+        OMP_SIMD
+        CPPALLY_DO_APPLY
+      } else {
+        CPPALLY_DO_APPLY
+      }
+    } else {
+      for (r_size_t i = 0; i < n; ++i){
+        target.set(i, fn(i, view(i)));
+      }
+    }
+    #undef CPPALLY_DO_APPLY
+  }
+
+  // Single re-usable routine for apply_* members
+  template <bool simd, bool parallel>
+  void do_apply(std::invocable<T> auto& fn) {
+    maybe_ensure_exclusive();
+    map_impl<simd, parallel>(*this, [&fn](r_size_t, auto v){ return fn(v); });
+  }
+  template <bool simd, bool parallel>
+  void do_apply_with_index(std::invocable<r_size_t, T> auto fn) {
+    maybe_ensure_exclusive();
+    map_impl<simd, parallel>(*this, std::move(fn));
+  }
+
+  public:
+
+  // Apply a function to each element with access to the index, modifying *this in-place: fn(index, value) -> T
+  // simd - Should function be applied in an omp simd loop (via OMP_SIMD)? Only applicable for RVectorisable types
+  // parallel - Should loop be exected using multiple threads? Only applicable for RVectorisable types. Threads are set via `set_threads()`
+  void apply_with_index(std::invocable<r_size_t, T> auto fn, bool simd, bool parallel) {
+    if (simd && parallel){
+      do_apply_with_index<true, true>(std::move(fn));
+    } else if (simd){
+      do_apply_with_index<true, false>(std::move(fn));
+    } else if (parallel){
+      do_apply_with_index<false, true>(std::move(fn));
+    } else {
+      do_apply_with_index<false, false>(std::move(fn));
+    }
+  }
+
+  void apply_with_index(std::invocable<r_size_t, T> auto fn) {
+    do_apply_with_index<false, false>(std::move(fn));
+  }
+
+  void apply_simd_with_index(std::invocable<r_size_t, T> auto fn) {
+    do_apply_with_index<true, false>(std::move(fn));
+  }
+
+  void apply_parallel_with_index(std::invocable<r_size_t, T> auto fn) {
+    do_apply_with_index<false, true>(std::move(fn));
+  }
+
+  void apply_parallel_simd_with_index(std::invocable<r_size_t, T> auto fn) {
+    do_apply_with_index<true, true>(std::move(fn));
+  }
+
+  void apply(std::invocable<T> auto fn, bool simd, bool parallel) {
+    if (simd && parallel){
+      do_apply<true, true>(fn);
+    } else if (simd){
+      do_apply<true, false>(fn);
+    } else if (parallel){
+      do_apply<false, true>(fn);
+    } else {
+      do_apply<false, false>(fn);
+    }
+  }
+
+  // Apply a function to each element, modifying *this in-place: fn(value) -> T
+  // apply_simd - Applies function under OpenMP simd loop. Only applicable for RVectorisable types.
+  // apply_parallel - Applies function using multiple threads. Also only applicable for RVectorisable types.
+  // apply_parallel_simd - Applies function using multiple threads and under OpenMP simd.
+  void apply(std::invocable<T> auto fn) {
+    do_apply<false, false>(fn);
+  }
+
+  void apply_simd(std::invocable<T> auto fn) {
+    do_apply<true, false>(fn);
+  }
+
+  void apply_parallel(std::invocable<T> auto fn) {
+    do_apply<false, true>(fn);
+  }
+
+  void apply_parallel_simd(std::invocable<T> auto fn) {
+    do_apply<true, true>(fn);
+  }
+
+  // ----- Algorithms -----
+
+  // From left-to-right: recursively apply a binary function to pairs of elements across *this
+  // the result of each fn is used the first argument of the next call
+  // use `done(x)` and `keep(x)` to break early and/or continue,  where x is the result to escape or carry forward
+  template <typename Acc, typename F>
+  requires std::invocable<F&, Acc, T>
+  auto reduce(F fn, Acc init, bool na_skip = false, r_size_t from = 0) const {
+
+    using ret_t = std::remove_cvref_t<std::invoke_result_t<F&, Acc, T>>;
+    using acc_t = typename internal::fold_result<ret_t>::acc;
+    r_size_t n = length();
+    acc_t acc = as<acc_t>(init);
+
+    for (r_size_t i = from; i < n; ++i){
+      if (na_skip && is_na(view(i))){
+        continue;
+      }
+      if constexpr (internal::fold_result<ret_t>::stops){
+        auto step = fn(acc, view(i));
+        acc = std::move(step.value);
+        if (step.stop){
+          break;
+        }
+      } else {
+        acc = fn(acc, view(i));
+      }
+    }
+    return acc;
+  }
+
+  // From left-to-right: recursively apply a binary function to pairs of elements across *this
+  // the result of each fn is used the first argument of the next call
+  // use `done(x)` and `keep(x)` to break early and/or continue,  where x is the result to escape or carry forward
+  template <typename F>
+  requires std::invocable<F&, T, T>
+  auto reduce(F fn) const {
+    if (length() == 0) [[unlikely]] {
+      abort("`reduce`: cannot reduce an empty vector without an `init` starting value");
+    }
+    return reduce(fn, /*init = */ view(0), /*na_skip = */ false, /*from = */ 1);
+  }
+
+  template <typename Acc, typename F>
+  requires std::invocable<F&, Acc, T>
+  auto cumulative_reduce(F fn, Acc init, bool na_skip = false, r_size_t from = 0) const {
+    using acc_t = std::remove_cvref_t<std::invoke_result_t<F&, Acc, T>>;
+    static_assert(!internal::fold_result<acc_t>::stops,
+                  "cumulative_reduce combiner must not short-circuit (no `done()`)");
+    r_vec<acc_t> out(length() - from);
+    r_size_t k = 0;
+    reduce([&](const acc_t& acc, T x){
+      acc_t next = (na_skip && is_na(x)) ? acc : fn(acc, x);
+      out.set(k++, next);
+      return next;
+    }, as<acc_t>(init), /*na_skip=*/false, from);
+    return out;
+  }
+
+  template <typename F>
+  requires std::invocable<F&, T, T>
+  auto cumulative_reduce(F fn, bool na_skip = false) const {
+    using acc_t = std::remove_cvref_t<std::invoke_result_t<F&, T, T>>;
+    r_size_t n = length();
+    if (n < 2){
+      return as<r_vec<acc_t>>(*this);
+    }
+    r_vec<acc_t> out(n);
+    acc_t acc = as<acc_t>(view(0));
+    out.set(r_size_t{0}, acc);
+    for (r_size_t i = 1; i < n; ++i){
+      if (na_skip && is_na(view(i))){
+        out.set(i, acc);
+        continue;
+      }
+      acc = fn(acc, view(i));
+      out.set(i, acc);
+    }
+    return out;
+  }
+
+  // Very fast multi-threaded count of NAs in vector.
+  // Fall-back to ALTREP-safe reads if data is not materialised.
+  r_size_t na_count() const {
+
+    r_size_t out = 0;
+    r_size_t n = length();
+
+    static_assert(
+      noexcept(is_na(internal::unsafe_reconstruct_view<T>(*m_data))),
+      "internal error in na_count: constructor must be non-throwing"
+    );
+
+    if (is_materialised()){
+
+      const auto* RESTRICT p = data();
+  
+      int n_threads = internal::calc_threads(n);
+  
+      if (n_threads > 1){
+        OMP_PARALLEL_FOR_SIMD_REDUCTION1(n_threads, +:out)
+        for (r_size_t i = 0; i < n; ++i){
+          out += static_cast<r_size_t>(is_na(internal::unsafe_reconstruct_view<T>(p[i])));
+        }
+      } else {
+        OMP_SIMD_REDUCTION1(+:out)
+        for (r_size_t i = 0; i < n; ++i){
+          out += static_cast<r_size_t>(is_na(internal::unsafe_reconstruct_view<T>(p[i])));
+        }
+      }
+    } else {
+      for (r_size_t i = 0; i < n; ++i){
+        out += is_na(view(i));
+      }
+    }
+    
+    return out;
+  }
+
+  // Count of occurrences of `val`
+  r_size_t count(const T& val) const {
+    r_size_t out = 0;
+    r_size_t n = length();
+
+    for (r_size_t i = 0; i < n; ++i) out += identical(view(i), val);
+    
+    return out;
+  }
+  // Remove `val` from vector - `remove()` creates a new vector if `val` exists.
+  [[nodiscard]] r_vec<T> remove(const T& val) const {
+    r_size_t n_remove = count(val);
+    r_size_t n = length();
+
+    if (n_remove == 0){
+      return *this;
+    } else if (n_remove == n){
+      return r_vec<T>();
+    } else {
+      r_vec<T> out(n - n_remove);
+      r_size_t k = 0;
+
+      for (r_size_t i = 0; i < n; ++i){
+        if (!identical(view(i), val)){
+          out.set(k++, view(i));
+        }
+      }
+      return out;
+    }
+  }
+
+  // Find first index of value.
+  // r_int64::na() is returned on no match.
+  r_int64 find_first(const T& val) const {
+    r_size_t n = length();
+    for (r_size_t i = 0; i < n; ++i) {
+      if (identical(view(i), val)) {
+        return r_int64(static_cast<int64_t>(i));
+      }
+    }
+    return r_int64::na();
+  }
+
+  // Locations of `val` in vector
+  template <internal::RNumericSubscript V = r_int>
+  r_vec<V> find(const T& val, bool invert = false) const {
+
+    r_size_t n = length();
+
+    using int_t = unwrap_t<V>;
+  
+    if constexpr (is<V, r_int>){
+      if ( (n > r_limits<r_int>::max()).is_true()) [[unlikely]] {
+        abort("`x` is a long vector, please use `find<r_int64>` instead");
+      }
+    }
+  
+    r_size_t n_vals = count(val);
+    int_t whichi = 0; 
+    int_t i = 0; 
+  
+    if (invert){
+      int_t out_size = n - n_vals;
+      r_vec<V> out(out_size);
+      while (whichi < out_size){
+        out.set(whichi, V(i));
+        whichi += static_cast<int_t>(!identical(view(static_cast<r_size_t>(i++)), val));
+      }
+      return out;
+    } else {
+      int_t out_size = n_vals;
+      r_vec<V> out(out_size);
+      while (whichi < out_size){
+        out.set(whichi, V(i));
+        whichi += static_cast<int_t>(identical(view(static_cast<r_size_t>(i++)), val));
+      }
+      return out;
+    }
+  }
+
+  // Sequential fill
+  void fill(r_size_t start, r_size_t n, const T& val){
+    
+    if constexpr (RVectorisable<T>){
+      
+      maybe_ensure_exclusive();
+      auto* RESTRICT p_target = data();
+      unwrap_t<T> v = unwrap(val);
+      std::fill_n(p_target + start, n, v);
+
+    } else {
+      for (r_size_t i = 0; i < n; ++i) set(start + i, val);
+    }
+  }
+
+  // Fill entire vector with value
+  void fill(const T& val){
+    fill(0, length(), val);
+  }
+
+  // Replace all occurrences of `old_val` with `new_val` (in-place).
+  void replace(r_size_t start, r_size_t n, const T& old_val, const T& new_val){
+    for (r_size_t i = 0; i < n; ++i) {
+      r_size_t idx = start + i;
+      if (identical(view(idx), old_val)){
+        set(idx, new_val);
+      }
+    }
+  }
+
+  void replace(const T& old_val, const T& new_val){
+    replace(0, length(), old_val, new_val);
+  }
+
+  // New vector resized to length `n`
+  [[nodiscard]] r_vec<T> resize(r_size_t n) const {
+
+    if (is_null()){
+      return r_vec<T>(n);
+    }
+
+    r_size_t vec_size = length();
+
+    if (n == vec_size){
+      return *this;
+    } else {
+    #ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+          r_vec<T> resized_vec = is_resizable() ? r_vec<T>(n, resizable{}, std::max(n, capacity())) : r_vec<T>(n);
+    #else
+          r_vec<T> resized_vec(n);
+    #endif
+      r_size_t n_to_copy = std::min(n, vec_size);
+      r_copy_n(resized_vec, *this, 0, n_to_copy);
+      if (has_names()){
+        resized_vec.set_names(names().resize(n));
+      }
+      return resized_vec;
+    }
+  }
+
+#ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+  // Resize in place (no copy) to n <= capacity(), unlike resize(). R drops names, dim and dimnames
+  void set_length(r_size_t n){
+    
+    r_size_t len = length();
+    
+    if (n < 0) [[unlikely]] {
+      abort ("`set_length()`: `n` must be >= 0");
+    }
+
+    if (n == len){
+      return;
+    }
+
+    if (n > capacity() || !is_resizable()) [[unlikely]] {
+      set_capacity(std::max(n, len));
+    }
+    resize_in_place(n);
+  }
+
+  // Reallocate with room for cap >= length() elements; also makes a fixed vector resizable
+  void set_capacity(r_size_t cap){
+    if (cap < length()) [[unlikely]] {
+      abort("`set_capacity`: capacity must be >= length(), use `set_length()` first");
+    }
+    if (cap == capacity() && is_resizable()){
+      return;
+    }
+    r_size_t n = length();
+    r_vec<T> out(n, resizable{}, cap);
+    r_copy_n(out, *this, 0, n);
+    out.copy_attrs_from(*this);
+    *this = std::move(out);
+  }
+
+  // Make room for at least n elements and never shrink (like std::vector::reserve)
+  void reserve(r_size_t n){
+    if (n > capacity() || is_null()){
+      set_capacity(n);
+    }
+  }
+
+  // Like std::vector.push_back(), append value and double capacity when full
+  // O(1) on average
+  void push_back(const T& val){
+    r_size_t n = length();
+    if (n == capacity()) [[unlikely]] {
+      // Double the capacity
+      set_capacity(std::max<r_size_t>(2 * n, 1));
+    }
+    resize_in_place(n + 1);
+    set(n, val);
+  }
+
+  // Remove last element
+  void pop_back(){
+    r_size_t n = length();
+    if (n == 0) [[unlikely]] {
+      abort("`pop_back()`: vector is empty");
+    }
+    if (!is_resizable()) [[unlikely]] {
+      set_capacity(n); // -> resizable vector
+    }
+    resize_in_place(n - 1);
+  }
+
+  // Remove all elements while preserving capacity
+  void clear(){
+    set_length(r_size_t(0));
+  }
+
+  // Append vector efficiently
+  void append(const r_vec<T>& x){
+    r_size_t n = length();
+    r_size_t m = x.length();
+    if (m == 0){
+      return;
+    }
+    if (n + m > capacity()){
+      set_capacity(std::max(2 * capacity(), n + m));
+    }
+    resize_in_place(n + m);
+    r_copy_n(*this, x, n, m);
+  }
+
+  void shrink_to_fit() {
+    // capacity can only be > length for resizable vectors, so this is a safe check
+    if (capacity() > length()){
+      set_capacity(length());
+    }
+  }
+
+#endif
+
+  // Recycle vector elements to desired length
+  [[nodiscard]] r_vec<T> rep_len(r_size_t n) const {
+
+    if (is_null()){
+      return r_vec<T>(n, na<T>());
+    }
+
+    r_size_t size = length();
+
+    if (size == n){
+      return *this;
+    }
+
+    #ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+        r_vec<T> out = is_resizable() ? r_vec<T>(n, resizable{}, std::max(n, capacity())) : r_vec<T>(n);
+    #else
+        r_vec<T> out(n);
+    #endif
+
+    if (size == 1){
+      out.fill(view(0));
+    } else if (n > 0 && size > 0){
+      // Copy first block
+      r_copy_n(out, *this, 0, std::min(size, n));
+
+      if (n > size){
+        // copy result to itself, doubling each iteration
+        r_size_t copied = size;
+        while (copied < n) {
+          r_size_t to_copy = std::min(copied, n - copied);
+          r_copy_n(out, out, copied, to_copy);
+          copied += to_copy;
+        }
+      }
+      // If length > 0 but length(x) == 0 then fill with NA
+    } else if (size == 0 && n > 0){
+      if constexpr (RScalar<T>){
+        out.fill(na<T>());
+      }
+    }
+    if (has_names()){
+      out.set_names(names().rep_len(n));
+    }
+    return out;
+  }
+
+  // Reverse vector in-place
+  void rev() {
+    if (is_null()){
+      return;
+    }
+    r_size_t n = length();
+    r_size_t n1 = n / 2;
+    r_size_t n2 = n - 1;
+    for (r_size_t i = 0; i < n1; ++i){
+      r_size_t k = n2 - i;
+      T left = view(i);
+      set(i, view(k));
+      set(k, left);
+    }
+    if (has_names()){
+      r_vec<r_str_view> nms = names();
+      nms.rev();
+      set_names(nms);
+    }
+  }
+
+  // In-place shift: k > 0 lags (shifts right), k < 0 leads (shifts left)
+  void shift(r_size_t k = 1, const T& fill_value = na<T>()) {
+
+    r_size_t n = length();
+
+    if (n == 0 || k == 0) {
+      return;
+    }
+
+    r_size_t ak = std::abs(k);
+    if (ak >= n) {
+      fill(fill_value);
+      return;
+    }
+    if (k > 0) {
+      for (r_size_t i = n - 1; i >= k; --i) {
+        set(i, view(i - k));
+      }
+      for (r_size_t i = 0; i < ak; ++i) {
+        set(i, fill_value);
+      }
+    } else {
+      for (r_size_t i = 0; i < n - ak; ++i) {
+        set(i, view(i + ak));
+      }
+      for (r_size_t i = n - ak; i < n; ++i) {
+        set(i, fill_value);
+      }
+    }
+    if (has_names()){
+      r_vec<r_str_view> nms = names();
+      nms.shift(k, r_str_view());
+      set_names(nms);
+    }
+  }
+
+  // Fill vector with a regular sequence [init, init + 1, ..., init + n - 1]
+  void iota(T init = T(0)) requires (any<T, r_int, r_int64>) {
+    apply_simd_with_index([init](r_size_t i, auto){ return init + i; });
+  }
+
+  // Conditional member functions (only available for certain types)
+
+  // POSIXct-only members
+  r_str tzone() const requires RPsxctType<T> {
+    r_vec<r_str_view> tz(Rf_getAttrib(*this, cached_sym<"tzone">()));
+    
+    if (tz.length() == 0){
+      return cached_str<"">();
+    } else {
+      r_str_view tz_str = tz.view(0);
+      if (is_na(tz_str)) [[unlikely]] {
+        abort("tzone cannot be NA");
+      }
+      return r_str(tz_str);
+    }
+  }
+
+  void set_tzone(const char* tz) requires RPsxctType<T> {
+    if (is_null()) [[unlikely]] {
+      *this = r_vec<T>();
+    }
+    maybe_ensure_exclusive();
+    safe[Rf_setAttrib](*this, cached_sym<"tzone">(), r_vec<r_str>({ r_str(tz) }));
+  }
+
+  private:
+
+  #if R_VERSION >= R_Version(4, 5, 0)
+    // Does *this have R attributes?
+    static bool has_attrs(SEXP x) noexcept {
+        return static_cast<bool>(ANY_ATTRIB(x));
+    }
+  #else
+    // Does *this have R attributes?
+    static bool has_attrs(SEXP x) {
+      static r_function& r_attrs_fn = *new r_function("attributes", env::base_env);
+      return !r_vec<r_sexp>(r_attrs_fn( {r_sexp(x, internal::view_tag{})} )).is_null();
+    }
+  #endif
+
+  #ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+    // n must be >= 0 and <= capacity
+    // Very hot path: `push_back()` calls this on every append
+    void resize_in_place(r_size_t n){
+      ensure_exclusive();
+      // R_resizeVector() incurs a large overhead in hot loop ~ 3ns per call
+      // possible but slightly convoluted solution to speed this up would be to just defer the R C API resizing to operator SEXP()/r_sexp()
+      // which means that until *this is actually converted to SEXP, its length is out of sync with R C API.
+      // This solution would only work for direct pointer-writable data, so doesn't work for STRSXP or VECSXP because we call 
+      // SET_STRING_ELT()/SET_VECTOR_ELT() for those writes and R would throw an out-of-bounds error.
+      // ensure_exclusive() and invalidate_names_cache() collectively are ~ 1ns/call no matter what.
+      // The solution also relies on R not touching out-of-bounds slots when growing (likely true but not 100%).
+      R_resizeVector(*this, n);
+      m_length = n;
+      invalidate_names_cache();
+    }
+  #endif
+
+};
+
+// Alias of r_vec
+template <RVal T>
+using r_vector = r_vec<T>;
+
+template <RVector U>
+inline void r_copy_n(U& target, const unwrap_t<typename std::remove_cvref_t<U>::data_type>* source, r_size_t target_offset, r_size_t n) {
+  
+  using data_t = typename std::remove_cvref_t<U>::data_type;
+
+  if (n == 0) return;
+
+  if constexpr (RVectorisable<data_t>){
+    target.maybe_ensure_exclusive();
+    auto* p_target = target.data();
+    std::memmove(p_target + target_offset, source, n * sizeof(*p_target));
+  } else {
+    for (r_size_t i = 0; i < n; ++i) {
+      target.set(target_offset + i, internal::unsafe_reconstruct_view<data_t>(source[i]));
+    }
+  }
+}
+
+template <RVector U>
+inline void r_copy_n(U& target, const U& source, r_size_t target_offset, r_size_t n, r_size_t source_offset){
+  // Avoid materialising altrep source vector if flag is on
+  #if defined(CPPALLY_PRESERVE_ALTREP)
+    if (!source.is_materialised()){
+      for (r_size_t i = 0; i < n; ++i) {
+        target.set(target_offset + i, source.view(source_offset + i));
+      }
+      return;
+    }
+  #endif
+  r_copy_n(target, source.data() + source_offset, target_offset, n);
+}
+
+template <RVector U>
+inline void r_copy_n(U& target, const U& source, r_size_t target_offset, r_size_t n){
+  r_copy_n(target, source, target_offset, n, 0);
+}
+
+}
+
+#endif

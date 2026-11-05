@@ -1,0 +1,186 @@
+#ifndef CPPALLY_R_DF_METHODS_H
+#define CPPALLY_R_DF_METHODS_H
+
+// Methods for r_df that requires r_visit.h
+
+#include <cppally/vector/r_vector.h>
+#include <cppally/data_frame/r_df.h>
+#include <cppally/attributes/attributes.h>
+#include <cppally/r_sexp/visit.h>
+#include <cppally/coerce.h>
+#include <cppally/length.h>
+#include <cppally/sugar/rep.h>
+#include <cppally/sugar/recycle.h>
+#include <cppally/sugar/subset.h>
+#include <cppally/vector/make_vec.h>
+#include <cppally/r_sexp/r_sexp_methods.h>
+#include <string>
+
+namespace cppally {
+
+namespace internal {
+
+inline r_vec<r_sexp> new_df_impl(const r_vec<r_sexp>& cols, bool recycle, int nrows){
+
+    if (nrows < 0) [[unlikely]] {
+        abort("Supply a valid `nrows`");
+    }
+
+    r_size_t n = cols.length();
+    r_vec<r_sexp> out(n);
+
+    if (recycle){
+        for (r_size_t i = 0; i < n; ++i){
+            out.set(i, rep_len(cols.view(i), nrows));
+        }
+    } else {
+        for (r_size_t i = 0; i < n; ++i){
+            if (static_cast<int>(length(cols.view(i))) != nrows) [[unlikely]] {
+                abort("`new_df_impl()`: lengths of cols must match `nrows`");
+            }
+            out.set(i, cols.view(i));
+        }
+    }
+
+    // Always provide names
+    r_vec<r_str_view> names = cols.names();
+    if (names.is_null()){
+        names = r_vec<r_str_view>(n);
+        std::string col_str = "col_";
+        for (r_size_t i = 0; i < n; ++i){
+            col_str += std::to_string(i + 1);
+            names.set(i, internal::c_str_to_r_str_view(col_str.c_str()));
+            col_str.assign("col_");
+        }
+    }
+    out.set_names(names); 
+
+    r_vec<r_int> row_names = create_row_names(nrows);
+    attr::set_attr(out, cached_sym<"class">(), data_frame_class());
+    attr::set_attr(out, cached_sym<"row.names">(), row_names);
+    return out;
+}
+
+inline r_vec<r_sexp> new_df_impl(const r_vec<r_sexp>& cols, bool recycle = true){
+    r_size_t nrows;
+    if (recycle){
+        nrows = list_common_length(cols);
+    } else {
+        if (cols.length() == 0){
+            nrows = 0;
+        } else {
+            nrows = length(cols.view(0));
+        }
+    }
+    return new_df_impl(cols, recycle, nrows);
+}
+
+}
+
+// Constructor from list of cols
+// Supply a nrows value for a custom recycle length
+inline r_df::r_df(const r_vec<r_sexp>& cols, bool recycle) : value(internal::new_df_impl(cols, recycle)){
+    init_df();
+}
+inline r_df::r_df(const r_vec<r_sexp>& cols, bool recycle, int nrows) : value(internal::new_df_impl(cols, recycle, nrows)){
+    cached_nrow = nrows;
+}
+// Atomic vector constructor
+template <RScalar T>
+inline r_df::r_df(const r_vec<T>& col) : r_df(r_vec<r_sexp>({ r_sexp(col, internal::view_tag{}) }), false, static_cast<int>(col.length())) {}
+// Factor constructor
+inline r_df::r_df(const r_factors& col) : r_df(col.value){}
+
+inline r_df r_df::get_row(int index) const {
+    const int ncols = ncol();
+    r_vec<r_sexp> out(ncols);
+    out.set_names(colnames());
+    attr::set_old_class(out, internal::data_frame_class());
+    attr::set_attr(out, cached_sym<"row.names">(), internal::single_row_names()); 
+
+    for (int i = 0; i < ncols; ++i){
+        out.set(i, r_sexp_view(value.view(i), [index]<typename vec_t>(const vec_t& vec) -> r_sexp {
+            if constexpr (requires { vec.view(index); }){
+                // Basically there's no way to go from an r_str to an r_factors object
+                // All RVector objects are well-defined in that they have one-to-one mappings to/from their scalar counterparts
+                // But that's not the case with other RComposite types like r_factors (and r_df)
+                if constexpr (RVector<vec_t>){
+                    return static_cast<r_sexp>(internal::as_list_element(vec.view(index)));
+                } else {
+                    return static_cast<r_sexp>(subset(vec, r_vec<r_int>({ r_int(index) }), /*invert=*/false, /*check=*/false));
+                }
+            } else {
+                abort("No view member exists for type %s", internal::type_str<vec_t>());
+            }
+        }));
+    }
+    return r_df(out, internal::no_checks_tag{}, 1);
+}
+
+inline void r_df::set_row(r_size_t index, const r_df& row){
+    int ncols = ncol();
+
+    if (ncols != row.ncol()) [[unlikely]] {
+        abort("`r_df::set_row()`: `ncol()` must match `row.ncol()`");
+    }
+    
+    if (!identical(colnames(), row.colnames())) [[unlikely]] {
+        abort("`r_df::set_row()`: `colnames()` must match `row.colnames()`");
+    }
+    
+    for (r_size_t i = 0; i < ncols; ++i){
+        r_sexp col = get_col(i);
+        r_sexp cell = row.get_col(i);
+        r_sexp_mutate(col, [&]<RComposite col_t>(col_t& c){
+            if constexpr (RDataFrame<col_t>){
+                c.set_row(0, view_as<col_t>(cell).get_row(0));
+            } else {
+                c.set(0, view_as<col_t>(cell).get(0));
+            }
+        });
+        value.set(i, col);
+    }
+}
+
+template <internal::RSubscript U>
+inline r_df r_df::select(const r_vec<U>& cols) const {
+    return r_df(subset(value, cols), false, nrow());
+}
+
+inline r_vec<r_str> r_df::rownames() const {
+    return as<r_vec<r_str>>(attr::get_attr(value, cached_sym<"row.names">()));
+}
+
+// inline void check_compatible_dfs(const r_df& x, const r_df& y){
+//     if (!identical(x.colnames(), y.colnames())) [[unlikely]] {
+//         abort("(compatible_dfs): `x` and `y` must have the same colnames");
+//     }
+//     if (!identical(x.nrow(), y.nrow())) [[unlikely]] {
+//         abort("(compatible_dfs): `x` and `y` must have the same nrows");
+//     }
+//     // If col types aren't the same..
+//     //     abort("(compatible_dfs): `x` and `y` must have the same nrows");
+//     // }
+// }
+
+// Make in-line data frame
+template <typename... Args>
+inline r_df make_df(Args&&... args) {
+    return r_df(make_vec<r_sexp>(std::forward<Args>(args)...), /*recycle = */ true);
+}
+
+// Dispatch on the i-th column's wrapped type, gated to RComposite.
+// Non-RComposite SEXP types (r_sym, fallback r_sexp) abort.
+template <typename index_t, class F>
+decltype(auto) r_df::with_col(const index_t& index, F&& f, bool view_only) const {
+    auto col = [&]<RComposite T>(T&& x) -> decltype(auto) { return f(std::forward<T>(x)); };
+    if (view_only){
+        return r_sexp_view(view_col(index), col);
+    } else {
+        return r_sexp_visit(get_col(index), col);
+    }
+}
+
+}
+
+#endif

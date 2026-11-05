@@ -9,11 +9,16 @@ status](https://www.r-pkg.org/badges/version/cppally)](https://CRAN.R-project.or
 
 # cppally
 
-cppally is a high-performance header-only library providing a rich C++20
-API for advanced R data manipulation. Leveraging C++20 Concepts, custom
-R-based classes, templated functions and
-Single-Instruction-Multiple-Data (SIMD) vectorisation, cppally enables
-type-safety, performance, flexible templates and readable code.
+cppally is a high-performance, header-only library providing a rich
+C++20 API for R.
+
+It offers type-safe classes, C++20 concepts, template registration, and
+R-based scalars to make code readable, fast, and maintainable.
+
+Multiple threads and Single-Instruction-Multiple-Data (SIMD)
+vectorisation are used where possible. The number of threads used across
+cppally can be set with `cppally::set_threads()` and queried with
+`cppally::get_threads()`.
 
 For info on using cppally see [Getting started with
 cppally](https://nicchr.github.io/cppally/articles/cppally.html)
@@ -26,6 +31,64 @@ have been inspired to write this package. I’d also like to thank the
 authors and contributors of [Rcpp](https://github.com/RcppCore/Rcpp) for
 developing this ecosystem that has laid much of the groundwork for C++
 and R integration.
+
+## cppally features
+
+- Registering C++ templates to R
+
+- C++20 concepts based on R
+
+- Custom C++ scalar classes
+
+- NA-aware scalar algebra
+
+- C++ style R vectors with `r_vector<T>`
+
+- C++ class `r_sym` for R symbols
+
+- C++ class `r_function` for R functions
+
+- C++ class `r_df` for data frames
+
+- Date & Date-Time classes using `std::chrono`
+
+- Fast automatic garbage collector protection with `r_sexp`
+
+- Flexible coercion between types using `as<T>`
+
+- Visit type-erased `SEXP` with `r_sexp_visit`
+
+- SIMD vectorisation
+
+- Multi-threaded algorithms
+
+- Random number generation with `random_stream`
+
+- Rich math library
+
+- `std::optional` arguments
+
+- Fast name-lookup via hash maps
+
+- Factor manipulation
+
+- Attribute manipulation
+
+- Vectorisation of C++ functions using `pmap()`
+
+- Vectorised algebra
+
+- Fast sorting
+
+- Vector algorithms like `unique`, `subset`, and more
+
+- Statistical functions such as `sum()`, `var()`, `range()`,
+  `quantile()`, and more
+
+- C++ class `groups` for fast group ID generation with group metadata
+  members
+
+- Regular sequence generation
 
 ## Installation
 
@@ -41,7 +104,9 @@ or the development version
 pak::pak("NicChr/cppally")
 ```
 
-## Basic usage: Sum using a C++ template
+## Registering C++ templates to R
+
+**Example:** Templated sum
 
 ``` cpp
 
@@ -59,7 +124,7 @@ r_dbl cpp_sum(r_vector<T> x){
   
 ```
 
-Register the C++ function to R
+You can use `cpp_source()` to register this C++ function to R
 
 ``` r
 cpp_source(code = '
@@ -93,50 +158,188 @@ cpp_sum(c(1, NA, 3))
 #> [1] NA
 ```
 
+Since it is a template, it can accept various classes (that satisfy
+`RMathType`).
+
+``` r
+cpp_sum(c(T, F)) # Logicals
+#> [1] 1
+cpp_sum(c(1L, 2L, 3L)) # Integers
+#> [1] 6
+cpp_sum(c(1.5, 2.5, 3.5)) # Doubles
+#> [1] 7.5
+```
+
+Character vector elements (`r_str`) don’t satisfy `RMathType`, so
+`r_vector<r_str>` is rejected.
+
+``` r
+cpp_sum("A STRING")
+#> Error:
+#> ! Argument 1 of type character does not satisfy the template constraints
+```
+
 ## Design choices
 
 ### Templates
 
-cppally makes heavy use of templates for powerful generic programming.
-While this offers a flexible framework for writing generic functions, it
-comes at the cost of slower compile times and larger binary sizes.
+cppally uses templates a lot for generic programming. While this can be
+a flexible way to write generic functions, it can slow down compile
+times and increase binary sizes.
 
-Users can write and optionally register their own templates (to R).
-There are two main limitations to be aware of. The first is that
-templates must be written in header files if they are to be used across
-multiple compilation units. The other big limitation is that template
-specialisations cannot be called from R, so when calling C++ template
-functions from R, we always rely on automatic deduction from the
-function inputs. There is a workaround discussed in the main vignette
-[Getting started with
-cppally](https://nicchr.github.io/cppally/articles/cppally.html)
+There are two limitations when it comes to registering C++ templates to
+R.
+
+- Templates must be written in header files
+
+- Template specialisations cannot be directly called from R
+
+The first is a C++ limitation, though it only applies when that template
+is shared across more than 1 cpp file (translation unit).
+
+The second is an R/C++ interoperability limitation. It means we can’t
+call e.g. `foo<T>(x)` directly from R. Instead we rely on automatic
+deduction, which the majority of templates use. Automatic deduction here
+looks like `foo(x)` where `T` is deduced from `x` by a cppally template
+dispatch layer between R and C++.
 
 ### Scalar R types and custom methods
 
-cppally offers R-based C++ scalar types that are `NA` aware. To achieve
-this multiple methods such as binary arithmetic operators have been
-written to ensure `NA` is propagated correctly. While every attempt has
-been made to make this as fast as possible, it adds some overhead and in
-some cases can prevent effective vectorisation (via e.g. SIMD
-instructions). If you find that this is slowing things down too much you
-can work with the underlying C/C++ types using `unwrap_t<>` and
-`unwrap()`.
+cppally offers scalar C++ types that mirror their R counterpart in the
+sense that they are `NA` aware and match other R semantics specific to
+that class.
+
+Scalar classes that cppally offers
+
+| Scalar class | R-counterpart           |
+|--------------|-------------------------|
+| `r_lgl`      | `logical(1)`            |
+| `r_int`      | `integer(1)`            |
+| `r_dbl`      | `double(1)`             |
+| `r_str`      | `character(1)`          |
+| `r_cplx`     | `complex(1)`            |
+| `r_int64`    | `bit64::integer64(1)`   |
+| `r_date`     | `as.Date(double(1))`    |
+| `r_psxct`    | `as.POSIXct(double(1))` |
+| `r_raw`      | `raw(1)`                |
+
+#### Scalar arithmetic
+
+Many operators and methods have been written to ensure safe, correct,
+and efficient behaviour. This includes binary arithmetic operators such
+as: `+`, `-`, `/`, `*`, and many more.
+
+For example, in standard C++, an integer divided by another integer
+`int / int` always results in an integer `int`. With cppally, division
+always results in an R double `r_dbl`, so `r_int / r_int` returns an R
+double, matching R semantics.
+
+Another example is the modulo operator `%`. With standard C++ integers,
+this returns the remainder after integer division (truncated towards
+zero), but R uses Knuth floored division, which cppally also implements
+to match. `(int) -5 % 2` returns -1 (truncated modulo), whereas
+`(r_int) -5 % 2` returns 1 (floored modulo).
+
+#### Integer overflow
+
+Integer overflow with cppally integers is **never** undefined behaviour.
+`NA` will **always** be returned where there is integer overflow. Let’s
+look at how cppally’s `+` operator is currently defined to see this in
+detail.
+
+``` cpp
+// First few lines of cppally::operator+
+
+template <MathType T, MathType U>
+requires (RMathType<T> || RMathType<U>)
+  inline constexpr auto operator+(T lhs, U rhs) noexcept {
+    
+    using common_t = common_math_t<T, U>;
+    
+    if constexpr (RIntegerType<common_t>){
+      using I  = unwrap_t<common_t>;
+      using UI = std::make_unsigned_t<I>;
+      
+      I a = static_cast<I>(unwrap(lhs));
+      I b = static_cast<I>(unwrap(rhs));
+      
+      // Wraparound sum via unsigned: defined behaviour
+      I s = static_cast<I>(static_cast<UI>(a) + static_cast<UI>(b));
+      
+      // Overflowed iff a and b share a sign that s does not
+      // a ^ s: Sign bit of the XOR is 1 when a and s have different signs, otherwise 0
+      // b ^ s: Same logic as a ^ s
+      // (a ^ s) & (b ^ s): bitwise AND, the sign bit of the result is 1 only when both a ^ s and b ^ s have their sign bit set
+      // Overflow can only happen when we are adding two numbers of the same sign
+      // and because this is C++20, two's complement applies, which means we can check whether the top bit is set via < 0
+      bool bad = (((a ^ s) & (b ^ s)) < 0) | internal::any_arithmetic_na(lhs, rhs);
+      return bad ? common_t::na() : common_t(s);
+```
+
+The steps are as follows:
+
+1.  Find the common type between the two via `cppally::common_math_t`
+2.  Work with the unwrapped C++ primitives
+3.  Cast `lhs` and `rhs` to the common integer type
+4.  Cast `lhs` and `rhs` to their unsigned type, add together, and cast
+    back to the common signed type
+5.  If `a` and `b` have identical sign but `s` does not, then there is
+    integer overflow
+6.  If there was overflow or if either `lhs` or `rhs` is `NA`, return
+    `NA`, otherwise return the added result
+
+Since we are using same-width[^1] integers and branchless operations,
+integer addition with cppally is fast and easily SIMD vectorisable.
+
+#### Relational operators
+
+Relational operators like `==`, `<`, etc, are all NA-aware as well, and
+return `r_lgl` instead of `bool`.
+
+For example `r_int(5) == r_dbl(5)` returns `r_true`, whereas
+`na<r_int>() == na<r_int>()` returns `r_na`.
 
 ### Automatic protection
 
 Like the excellent cpp11 package, cppally also handles automatic
 protection for R objects. For more info see [Automatic
-Protection](https://nicchr.github.io/cppally/articles/protection.html)
+Protection](https://nicchr.github.io/cppally/articles/protection.html).
 
 ### ALTREP
 
 For performance reasons, ALTREP materialisation is eager by default,
-which means that ALTREP vectors are materialised on construction. To
-preserve ALTREP compact representations, one can enable the package-wide
-‘CPPALLY_PRESERVE_ALTREP’ flag. This can be done through
+which means that ALTREP vectors are materialised on construction.
+
+To preserve ALTREP compact representations, one can enable the
+package-wide `CPPALLY_PRESERVE_ALTREP` flag. This can be done through
 `cppally::use_preserve_altrep_flag()` or
 `cppally::cpp_source(..., preserve_altrep = TRUE)`. You can also
-manually add the ‘-DCPPALLY_PRESERVE_ALTREP’ flag to Makevars.
+manually add the `-DCPPALLY_PRESERVE_ALTREP` flag to Makevars.
+
+### Copy-on-modify
+
+Copy-on-modify is an opt-in feature which can be enabled via
+`cppally::use_copy_on_modify()` or by setting the
+`CPPALLY_COPY_ON_MODIFY` Makevars flag directly.
+
+When enabled, all modifications are first checked to ensure that the
+object being modified isn’t referenced or owned by another object. If it
+is referenced, a copy is taken first before modifying.
+
+This safety check is inherently single-threaded which means that
+enabling copy-on-modify disables almost all parallelisation, degrading
+cppally performance. Enable if you want to prevent accidental
+modification of shared objects.
+
+By default, copy-on-modify is disabled and hence all element setting is
+done in-place. It is up to the user to ensure that the vector they are
+modifying is safe to modify. Vectors you create with `r_vector<T>(n)`
+are freshly constructed, and hence safe to modify at that point. You can
+reliably check that it is safe to modify a vector by first calling
+`r_vector::is_exclusive()`. If the vector is exclusive, it means it is
+not referenced by another object and therefore is safe to modify
+in-place. If it is not exclusive, you can call `r_vector::copy()` to
+return a copied (fresh) vector.
 
 ### Using both cppally and the R C API
 
@@ -157,41 +360,113 @@ it can do that is by detecting changes to the names via
 
 ### Attributes
 
-Attribute manipulation is possible and helpers can be found in the
-`attr` namespace via `cppally::attr::`
+Attribute manipulation can be done using functions in the `attr`
+namespace via `cppally::attr::`
 
 ### Views
 
-To avoid the overhead associated with automatic protection entirely, one
-can use view types like e.g. `r_str_view`, a non-owning class for R
-strings. For more info on views see [Automatic
+A view in standard C++ can mean different things. With
+`std::string_view`, it means we don’t own the string data, we are just
+viewing its contents. `r_str_view` is similar, but the data it’s
+referring to is the underlying `SEXP`. Views in cppally mean “I don’t
+protect the `SEXP`”. Therefore, `r_str_view` is a view into the
+`CHARSXP`, without taking protection ownership of it. `r_str` on the
+other hand does protect the `CHARSXP`, via `r_sexp`.
+
+#### Why use views?
+
+We offer views for performance reasons. Protecting an object is a
+considerable overhead (about 5-10 ns per protect). We can avoid that
+overhead by using views. This is safe as long as we are sure that the
+view object is protected by another object.
+
+Here are some common use-cases where one might use views:
+
+- **Setting new vector elements:** No need to protect newly created
+  elements when they are going to be protected by their parent vector
+  anyway
+
+- **Using vector elements temporarily:** It is fine if an element is
+  used for a short-lived time, so long as the element does not outlive
+  its parent vector
+
+- **Referencing protected `SEXP` constants:** Creating `r_sexp`
+  instances around `SEXP` objects that are static constants and known to
+  be protected. E.g. `R_NilValue`.
+
+- **Using `r_str_view` as an argument:** Since `r_str` implicitly
+  converts to `r_str_view`, a function with argument `r_str_view` will
+  implicitly accept both `r_str` and `r_str_view`, avoiding any
+  protection overhead.
+
+#### How to use views
+
+`r_str_view` is a dedicated view type for `r_str`. As mentioned above it
+can be used as function arguments for string inputs. This has the
+benefit of flexibly accepting `r_str` and `r_str_view`, without the
+compile cost of a template.
+
+It is okay as an input, but generally not okay as an output.
+
+Good:
+
+``` cpp
+r_str foo(r_str_view x){
+  return r_str(x);
+}
+```
+
+Bad:
+
+``` cpp
+r_str_view foo(r_str_view x){
+  r_str my_str("hello");
+  return my_str;
+}
+```
+
+If in doubt, always use `r_str`. For more info on views see [Automatic
 Protection](https://nicchr.github.io/cppally/articles/protection.html)
 
-### Opt-in copy-on-modify
+#### View a vector element
 
-Copy-on-modify can be enabled via `cppally::use_copy_on_modify()` or by
-setting the CPPALLY_COPY_ON_MODIFY Makevars flag directly. When this is
-enabled, all in-place modifications check that the object being modified
-isn’t referenced or owned by another object. If it is referenced, a copy
-is taken first before modifying, otherwise it directly modifies.
+If you have a vector, you can use `r_vector::view()`. This will get the
+element without re-protecting it. Just make sure that the element view
+does not outlive its parent vector.
 
-This safety check is inherently single-threaded which effectively
-disables almost all parallelisation. Enable this if prevention of
-accidental modification is a high concern. On the other hand, leaving it
-disabled may be preferable when performance is important.
+``` cpp
+r_vector<r_sexp> my_list( {r_sexp(), r_sexp()} );
 
-By default, copy-on-modify is disabled and hence all element setting is
-done in-place via `r_vector::set()`. It is up to the user to ensure that
-a fresh vector is created before further manipulation or that it’s safe
-to modify the existing vector.
+// Unprotected but implicitly protected by my_list
+r_sexp element0 = my_list.view(0);
+r_sexp element1 = my_list.view(1);
+
+// element0 or element1 must not outlive my_list
+```
+
+A copy of an element view is still a view, and not protected.
+
+``` cpp
+r_sexp my_element = r_sexp(element0); // my_element is not protected
+```
+
+If in doubt, use `get()`
+
+``` cpp
+// Both element0 and element1 are protected themselves
+r_sexp element0 = my_list.get(0);
+r_sexp element1 = my_list.get(1);
+
+r_sexp my_element = element0; // Copy here is very cheap (0.2-0.5 ns/copy)
+```
 
 ### Lossy coercion
 
 Any coercion that results in complete information loss is an error
-(partial is allowed, e.g. double -\> int).
+(partial is allowed, e.g. `double` -\> `int`).
 
-For example, string -\> int may not be possible without complete
-information loss
+For example, string -\> integer conversion may not be possible without
+complete information loss
 
 ``` cpp
 as<r_int>(r_str("a"))
@@ -290,15 +565,20 @@ count_val(x, "1. 0")
 
 All indexing is 0-based including subsetting vectors.
 
+``` cpp
+subset(make_vector<r_dbl>(10, 20, 30), make_vector<r_int>(1)); // index 1 = second element = 20
+```
+
 ### 64-bit integers
 
 On the C++ side, 64-bit integers are fully supported, including vectors.
 To return 64-bit integers to R we need the bit64 package to be loaded.
-cppally delegates the handling of 64-bit integer vectors to bit64 by
-marking them with the “integer64” class.
+cppally delegates the handling of 64-bit integer vectors **in R** to
+bit64 by marking them with the “integer64” class.
 
 ``` r
 library(bit64)
+#> Warning: package 'bit64' was built under R version 4.6.1
 ```
 
 ``` cpp
@@ -315,9 +595,9 @@ as_int64(.Machine$integer.max) + 1L
 #> [1] 2147483648
 ```
 
-Please note that other signed 64-bit integer types like `int64_t`,
-`R_xlen_t` and cppally’s `r_size_t` will convert to 64-bit integer
-vectors when returned to R.
+Please note that aliases of standard C++ signed 64-bit integer types
+like `int64_t`, `R_xlen_t` and cppally’s `r_size_t` will convert to
+64-bit integer vectors when returned to R.
 
 ``` cpp
 as<r_size_t>(r_int(0))
@@ -344,10 +624,11 @@ as<int64_t>(r_int(0))
 
 The cppally version of R’s `R_NilValue` is `r_null` which is of type
 `r_sexp`. In an attempt to avoid the use of additional meta-programming
-tactics to deal with `r_null`, we allow vectors to be able to contain
-`r_null` which makes programming with R attributes easier. This means
-`r_vector<T>` objects can be `r_null`. To detect this, use the
-`is_null()` member function.
+tactics to deal with `r_null`, we allow vectors the special ability to
+hold `r_null`. This makes programming with attributes easier, since
+attributes are sometimes vectors and sometimes `NULL`.
+
+To check if a vector is `NULL`, use `r_vector::is_null()`.
 
 ``` cpp
 r_vector<r_int>(r_null)
@@ -361,40 +642,32 @@ r_vector<r_int>(r_null).is_null()
 
     #> [1] TRUE
 
-## Useful Makevars flags
+## Large cpp files on Windows
 
 Because cppally is a template-heavy library, binary sizes can sometimes
-get large. This is primarily an issue on windows which will throw a
-compiler error if a single .o file gets too big. In this case you may
-want to consider adding the following flag to Makevars.win
+get large. Once a `.o` file gets too big, Windows will throw a compiler
+warning or error (the default limit is 65,279 addressable sections). To
+increase this limit to 4,294,967,296, add the following flag:
 
     PKG_CXXFLAGS = -Wa,-mbig-obj
 
-To benefit from OMP SIMD vectorisation and parallelisation, it is
-recommended to add these flags to Makevars
+If you are submitting an R package to CRAN, this will likely trigger a
+CRAN note, so it is worth flagging this in your `cran-comments.md` file.
 
-    PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
-    PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)
+## Enabling OpenMP
 
-And these flags to Makevars.win (including the windows specific binary
-size flags)
+To benefit from OpenMP multi-threaded execution and SIMD vectorisation,
+run `cppally::use_openmp()` which will set the appropriate Makevars
+flags. Note that this is automatically set by `cppally::use_cppally()`.
 
-    PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -Wa,-mbig-obj
-    PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)
+Threads can be controlled with `set_threads()` and `get_threads()`.
 
 ## C++20 and RStudio
 
 At the moment C++20 is not fully supported via RStudio, so I would
-recommend using vscode with the C/C++ for Visual Studio Code extension.
-Positron may also be an option but since I haven’t used it, I can’t
-speak to its capabilities.
+recommend using VSCode with the C/C++ for Visual Studio Code extension.
 
-While I personally use vscode for C++ code and RStudio for R code and
-package development, you can also use vscode (or Positron) for both
-these things, but again, I haven’t personally used vscode for writing R
-code so I can’t say much about it.
-
-To get vscode’s intellisense to work correctly, you will likely need to
+To get VSCode intellisense to work correctly, you will likely need to
 set some parameters in c_cpp_properties.json.
 
 My json file looks like this:
@@ -453,3 +726,6 @@ Sys.which(cxx_bin)
 
 Once you have both paths, set compilerPath and the R include path in
 c_cpp_properties.json accordingly.
+
+[^1]: We could also check 32-bit integers for overflow by first casting
+    to 64-bit, but this is not as efficient as using 32-bit operations.

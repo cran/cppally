@@ -3,46 +3,61 @@
 
 #include <cppally/r_setup.h>
 #include <cppally/r_concepts.h>
-#include <cppally/r_sexp.h>
-#include <cppally/r_sexp_types.h>
-#include <cppally/r_str.h>
-#include <cppally/r_lazy.h>
+#include <cppally/r_sexp/r_sexp.h>
+#include <cppally/r_sexp/r_sexp_types.h>
+#include <cppally/scalar/r_lgl.h>
+#include <cppally/scalar/r_str.h>
+#include <cppally/string/string_literal.h>
 
 namespace cppally {
 
-// Alias type for SYMSXP
+// R symbol
 struct r_sym {
+  
   SEXP value;
-  using value_type = r_sexp;
+  using value_type = SEXP;
 
   r_sym() : value(internal::lazy_sym_impl<"NA">()){}
-  explicit r_sym(SEXP x) : value{x} {
-    internal::check_valid_construction<r_sym>(value);
-  }
-  explicit r_sym(SEXP x, internal::view_tag) : value(x) {
-    internal::check_valid_construction<r_sym>(value);
-  }
-  explicit r_sym(const char *x) : value(Rf_installChar(Rf_mkCharCE(x, CE_UTF8))) {}
-  explicit r_sym(const r_str_view& x) : value(x.value == NA_STRING ? internal::lazy_sym_impl<"NA">() : Rf_installChar(x.value)){}
+
+  explicit r_sym(SEXP x) : value{x} { internal::check_valid_storage<r_sym>(value); }
+  explicit r_sym(SEXP x, internal::view_tag) : r_sym(x) {}
+  explicit r_sym(SEXP x, internal::no_checks_tag) : value(x) {}
+  explicit r_sym(SEXP x, internal::view_tag, internal::no_checks_tag) : value(x) {}
+
+  explicit r_sym(const char *x) : value(internal::unwind_protect([&] { return Rf_installChar(Rf_mkCharCE(x, CE_UTF8)); })) {}
+  explicit r_sym(r_str_view x) : value(x.is_na() ? internal::lazy_sym_impl<"NA">() : safe[Rf_installChar](unwrap(x))){}
   explicit r_sym(const r_str& x) : r_sym(r_str_view(x)){}
+  
+  explicit operator r_sexp() const noexcept { return r_sexp(value, internal::view_tag{}); }
   operator SEXP() const noexcept { return value; }
 
   // Coercion to r_str
-  r_str_view name() const {
-    return r_str_view(PRINTNAME(value)); 
+  r_str name() const {
+    return r_str(PRINTNAME(value), internal::view_tag{}, internal::no_checks_tag{}); 
   }
   explicit operator r_str_view() const {
-    return name();
+    return r_str_view(name());
   }
   explicit operator r_str() const {
-    return r_str(name());
+    return name();
+  }
+
+  static r_sym missing_symbol() {
+    return r_sym(R_MissingArg, internal::no_checks_tag{});
   }
 
 };
 
-template <internal::name T>
+inline r_lgl operator==(r_sym lhs, r_sym rhs) noexcept {
+  return r_lgl{unwrap(lhs) == unwrap(rhs)};
+}
+inline r_lgl operator!=(r_sym lhs, r_sym rhs) noexcept {
+  return r_lgl{unwrap(lhs) != unwrap(rhs)};
+}
+
+template <string_literal T>
 inline r_sym cached_sym() {
-    return r_sym(internal::lazy_sym_impl<T>());
+    return r_sym(internal::lazy_sym_impl<T>(), internal::no_checks_tag{});
 }
 
 namespace symbol {

@@ -6,32 +6,6 @@ is_windows <- function(){
   .Platform$OS.type == "windows"
 }
 
-generate_makevars <- function (
-    includes, cxx_std, debug,
-    preserve_altrep, check_factors, check_data_frames, copy_on_modify
-){
-  out <- c(
-    sprintf("CXX_STD=%s", cxx_std),
-    sprintf("PKG_CPPFLAGS=%s", paste0(includes, collapse = " "))
-  )
-  if (preserve_altrep){
-    out[2] <- paste(out[2], "-DCPPALLY_PRESERVE_ALTREP")
-  }
-  if (check_factors){
-   out[2] <- paste(out[2], "-DCPPALLY_CHECK_FACTORS")
-  }
-  if (check_data_frames){
-    out[2] <- paste(out[2], "-DCPPALLY_CHECK_DATA_FRAMES")
-  }
-  if (copy_on_modify){
-    out[2] <- paste(out[2], "-DCPPALLY_COPY_ON_MODIFY")
-  }
-  if (debug) {
-    out <- c(out, "override CXXFLAGS += -O0")
-  }
-  out
-}
-
 generate_cpp_name <- function (name, loaded_dlls = c("cppally", names(getLoadedDLLs()))){
   ext <- tools::file_ext(name)
   root <- tools::file_path_sans_ext(basename(name))
@@ -81,8 +55,8 @@ curr_env <- function(){
 #' `cpp_eval()` evaluates a single C++ expression and returns the result.
 #' For example `cpp_eval('get_threads()')` will run the C++ function
 #' `cppally::get_threads()` and return the number of OMP threads currently set
-#' for use. For expressions no return result, the call is evaluated and returns
-#' `NULL` invisibly.
+#' for use. For expressions that do not return a result, the call is
+#' evaluated and `NULL` is returned invisibly.
 #'
 #' @param file C++ file.
 #' @param code For `cpp_source()` - If `file` is `NULL`
@@ -92,6 +66,7 @@ curr_env <- function(){
 #' For `cpp_eval` - This can be a character vector of single-line expressions.
 #' @param env Environment where R functions should be defined.
 #' @param clean Should files be cleaned up after sourcing? Default is `TRUE`.
+#' Only newly created directories are removed, existing ones are left as-is.
 #' @param quiet Should compiler output be suppressed? Default is `TRUE`.
 #' @param cxx_std C++ standard to use. Should be >= C++20.
 #' @param debug Should C++ code be compiled in a debug build?
@@ -106,23 +81,35 @@ curr_env <- function(){
 #' `r_df` objects from `SEXP`? Default is `FALSE`.
 #' @param copy_on_modify Should copy-on-modify be used everywhere? Default is
 #' `FALSE`.
+#' @param openmp Should code be compiled with OpenMP flags? Default is `TRUE`.
 #' @param dir Directory to store the source files.
 #' The default is a temporary directory via `tempfile()` which is removed when
 #' `clean = TRUE`.
 #' @param simplify Applies to `cpp_eval`. A list of results is returned unless
 #' `length(code) == 1` and `simplify = TRUE`.
+#' @param cppally_header Which header should be
+#' included with the registered C++ code? The default is the full library
+#' "cppally.hpp". Choose "cppally_light.hpp" for the lighter header, which may
+#' provide quicker compile times, at the cost of less features.
+#' @param ... Further arguments passed to `use_template_dispatch_candidates()`.
 #'
 #' @returns
 #' `cpp_source()` invisibly compiles the C++ code and registers
 #' the `[[cppally::register]]` tagged functions to R. \cr
 #' `cpp_eval()` returns the results of the evaluated C++ expressions.
 #'
-#' @seealso [cpp_register]
+#' @seealso [cpp_register] [use_template_dispatch_candidates]
 #'
 #' @examples
 #'
 #' library(cppally)
 #' library(bit64)
+#'
+#' cpp_eval <- function(...){
+#'   # We don't need the full cppally header for these examples
+#'   cppally::cpp_eval(..., cppally_header = "cppally_light.hpp")
+#' }
+#'
 #' \donttest{
 #' cpp_eval('print("hello world!")')
 #'
@@ -151,14 +138,14 @@ curr_env <- function(){
 #' add(1, 2)
 #' add(2, NA)
 #'
-#' ### ALTREP ###
+#' ### ALTREP
 #'
 #' # cppally also supports lazy ALTREP materialisation as an opt-in feature.
 #' # To opt-in, set `preserve_altrep = TRUE`
 #'
 #' cpp_source(
 #'   code = '
-#'   #include <cppally.hpp>
+#'   #include <cppally_light.hpp>
 #'   using namespace cppally;
 #'
 #'   [[cppally::register]]
@@ -176,7 +163,7 @@ curr_env <- function(){
 #'
 #' cpp_source(
 #'   code = '
-#'   #include <cppally.hpp>
+#'   #include <cppally_light.hpp>
 #'   using namespace cppally;
 #'
 #'   [[cppally::register]]
@@ -197,7 +184,7 @@ curr_env <- function(){
 #' mark(last_altrep_aware(1:10^5)) # No materialisation
 #' mark(last_altrep_unaware(1:10^5)) # Materialises full vector
 #'
-#' ### Copy-on-modify ###
+#' ### Copy-on-modify
 #'
 #' # cppally supports copy-on-modify as an opt-in feature
 #' # It is disabled by default because it incurs a major performance penalty
@@ -208,7 +195,7 @@ curr_env <- function(){
 #'
 #' cpp_source(
 #'   code = '
-#'   #include <cppally.hpp>
+#'   #include <cppally_light.hpp>
 #'   using namespace cppally;
 #'
 #'   [[cppally::register]]
@@ -230,12 +217,12 @@ curr_env <- function(){
 #' # existing vector
 #' cpp_source(
 #'   code = '
-#'   #include <cppally.hpp>
+#'   #include <cppally_light.hpp>
 #'   using namespace cppally;
 #'
 #'   [[cppally::register]]
 #'   r_vec<r_int> cppally_reverse(r_vec<r_int> x){
-#'     r_vec<r_int> out = shallow_copy(x);
+#'     r_vec<r_int> out = x.copy();
 #'     out.rev();
 #'     return out;
 #'   }
@@ -247,28 +234,112 @@ curr_env <- function(){
 #'   cppally_copy_on_modify_reverse = reverse(x),
 #'   cppally_no_copy_on_modify_reverse = cppally_reverse(x)
 #' )
+#'
+#' ### Speeding up template-heavy compilation
+#'
+#' # When writing C++ code that only ever uses a small subset of cppally types,
+#' # we can restrict cppally template dispatch to only ever consider these types,
+#' # potentially speeding up compilation times. Only do this if you are certain
+#' # that these are the only viable types your code will ever reasonably accept.
+#' # If you are unsure, then do not use this feature and instead use
+#' # C++ concepts and template constraints.
+#'
+#' # Example: restrict template dispatch on `r_int` and `r_dbl`
+#' # `cppally::unique()` is templated on RComposite, which accepts all R vectors,
+#' # factors, and data frames. Therefore writing our own template which depends
+#' # on `unique()` being available for any generic type, might get expensive if say we
+#' # are only interested in integers and doubles.
+#'
+#' mark(
+#'
+#'   unrestricted = cpp_source(
+#'     code = '
+#'     #include <cppally.hpp>
+#'     using namespace cppally;
+#'
+#'     template <RVector T>
+#'     requires (requires (T obj){ unique(obj); })
+#'     [[cppally::register]]
+#'     T sorted_unique(T x){
+#'       return unique(x, /*sort = */ true );
+#'     }
+#'   ',
+#'     debug = TRUE
+#'   ),
+#'   restricted = cpp_source(
+#'     code = '
+#'     #include <cppally.hpp>
+#'     using namespace cppally;
+#'
+#'     template <RVector T>
+#'     requires (requires (T obj){ unique(obj); })
+#'     [[cppally::register]]
+#'     T sorted_unique2(T x){
+#'       return unique(x, /*sort = */ true );
+#'     }
+#'   ',
+#'     debug = TRUE,
+#'     scalar_types = c("r_int", "r_dbl"),
+#'     r_sexp = FALSE,
+#'     data_frames = FALSE,
+#'     factors = FALSE
+#'   ),
+#'   check = FALSE,
+#'   memory = FALSE,
+#'   iterations = 1
+#' )
+#'
+#' sorted_unique(c(1, 1, 2, 2, 3, 3))
+#' sorted_unique2(c(1, 1, 2, 2, 3, 3))
+#'
+#' sorted_unique(c("A", "A", "B", "B", "C", "C"))
+#'
+#' # Expected to fail
+#' try(sorted_unique2(c("A", "A", "B", "B", "C", "C")))
+#'
+#' # In production code and regular usage,
+#' # you would call `use_template_dispatch_candidates(c("r_int", "r_dbl"))`
+#' # which will add the relevant flag to your Makevars file(s).
 #' }
+#' rm(cpp_eval)
 #'
 #' @rdname cpp_source
 #' @export
-cpp_source <- function(file, code = NULL, env = parent.frame(),
-                       clean = TRUE, quiet = TRUE, debug = FALSE,
+cpp_source <- function(file = NULL, code = NULL, env = parent.frame(),
+                       clean = TRUE, quiet = TRUE,
+                       debug = FALSE,
                        preserve_altrep = FALSE,
                        check_factors = FALSE,
                        check_data_frames = FALSE,
                        copy_on_modify = FALSE,
+                       openmp = TRUE,
                        cxx_std = Sys.getenv("CXX_STD", "CXX20"),
-                       dir = tempfile()){
+                       dir = tempfile(),
+                       ...){
   stop_unless_installed(
     c("brio", "callr", "cli", "decor", "desc",
-      "glue", "purrr", "readr", "stringr", "vctrs")
+      "glue", "purrr", "readr", "stringr", "usethis", "vctrs")
   )
-  if (!missing(file) && !file.exists(file)) {
+
+  if (!is.null(file) && !is.null(code)){
+    cli::cli_abort("Please supply either a C++ file or string of C++ code")
+  }
+
+  if (!is.null(file) && !file.exists(file)) {
     stop("Can't find `file` at this path:\n", file, "\n", call. = FALSE)
   }
-  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
-  dir.create(file.path(dir, "R"), showWarnings = FALSE)
-  dir.create(file.path(dir, "src"), showWarnings = FALSE)
+
+  # Keep track of newly created directories
+  newly_created_dirs <- character()
+  for (d in c(dir, file.path(dir, "R"), file.path(dir, "src"))) {
+    if (!dir.exists(d)) {
+      dir.create(d, recursive = TRUE)
+      newly_created_dirs <- c(newly_created_dirs, d)
+    }
+  }
+  if (isTRUE(clean)) {
+    on.exit(unlink(newly_created_dirs, recursive = TRUE), add = TRUE)
+  }
   if (!is.null(code)) {
     tf <- tempfile(pattern = "code_", fileext = ".cpp")
     file <- tf
@@ -278,17 +349,17 @@ cpp_source <- function(file, code = NULL, env = parent.frame(),
     brio::write_lines(code, file)
   }
   if (!any(tools::file_ext(file) %in% c("cpp", "cc"))) {
-    stop("`file` must have a `.cpp` or `.cc` extension")
+    cli::cli_abort("{.arg file} must have a `.cpp` or `.cc` extension")
   }
   name <- generate_cpp_name(file)
   package <- tools::file_path_sans_ext(name)
   orig_dir <- normalizePath(dirname(file), winslash = "/")
   new_dir <- normalizePath(file.path(dir, "src"), winslash = "/")
-  file.copy(file, file.path(new_dir, name))
+  file.copy(file, file.path(new_dir, name), overwrite = TRUE)
   new_file_path <- file.path(new_dir, name)
   new_file_name <- basename(new_file_path)
   orig_file_path <- file.path(orig_dir, new_file_name)
-  suppressWarnings(all_decorations <- cpp_decorations(dir, is_attribute = TRUE))
+  suppressWarnings(all_decorations <- cpp_decorations(dir, files = new_file_path, is_attribute = TRUE))
   check_valid_attributes(all_decorations, file = orig_file_path)
   funs <- get_registered_functions(all_decorations, "cppally::register", quiet = quiet)
   cpp_functions_definitions <- generate_cpp_functions(funs, package = package)
@@ -303,16 +374,45 @@ cpp_source <- function(file, code = NULL, env = parent.frame(),
                     cpp_path)
   linking_to <- union(get_linking_to(all_decorations), "cppally")
   includes <- generate_include_paths(linking_to)
-  if (isTRUE(clean)) {
-    on.exit(unlink(dir, recursive = TRUE), add = TRUE)
-  }
   r_functions <- generate_r_functions(funs, package = package,
                                       use_package = TRUE)
-  makevars_content <- generate_makevars(
-    includes, cxx_std, debug,
-    preserve_altrep, check_factors, check_data_frames, copy_on_modify
+
+  # makevars flags
+  usethis::with_project(dir, force = TRUE, quiet = TRUE, code = {
+
+    extra_args <- list(...)
+
+    if (length(extra_args) > 0){
+      do.call(use_template_dispatch_candidates, c(extra_args, list(quiet = TRUE)))
+    }
+
+    if (openmp){
+      use_openmp(quiet = TRUE)
+    }
+    use_symbol_visibility(quiet = TRUE)
+    use_cxx_std(cxx_std, quiet = TRUE)
+    set_makevars_value(
+      "PKG_CPPFLAGS",
+      prefix = "-I",
+      value = stringr::str_flatten(includes, collapse = " "),
+      quiet = TRUE
     )
-  brio::write_lines(makevars_content, file.path(new_dir, "Makevars"))
+    if (preserve_altrep) {
+      use_preserve_altrep_flag(quiet = TRUE)
+    }
+    if (check_factors) {
+      use_check_factors(quiet = TRUE)
+    }
+    if (check_data_frames) {
+      use_check_data_frames(quiet = TRUE)
+    }
+    if (copy_on_modify) {
+      use_copy_on_modify(quiet = TRUE)
+    }
+    if (debug) {
+      use_debug(quiet = TRUE)
+    }
+  })
   shared_lib_name <- paste0(tools::file_path_sans_ext(new_file_name), .Platform$dynlib.ext)
   res <- callr::rcmd("SHLIB", c(cpp_path, "-o", shared_lib_name),
                      user_profile = TRUE, show = !quiet, wd = new_dir)
@@ -330,13 +430,19 @@ cpp_source <- function(file, code = NULL, env = parent.frame(),
   source(r_path, local = env)
   dyn.load(shared_lib, local = TRUE, now = TRUE)
 }
-source_single_exprs <- function(exprs, env = parent.frame(), clean = TRUE,
-                                quiet = TRUE, debug = FALSE,
+source_single_exprs <- function(exprs, env = parent.frame(),
+                                clean = TRUE,
+                                quiet = TRUE,
+                                debug = FALSE,
                                 preserve_altrep = FALSE,
                                 check_factors = FALSE,
                                 check_data_frames = FALSE,
                                 copy_on_modify = FALSE,
-                                cxx_std = Sys.getenv("CXX_STD", "CXX20")){
+                                openmp = TRUE,
+                                cxx_std = Sys.getenv("CXX_STD", "CXX20"),
+                                cppally_header = c("cppally.hpp", "cppally_light.hpp"),
+                                ...){
+  cppally_header <- match.arg(cppally_header)
   if (length(exprs) == 0){
     cli::cli_abort("{.arg exprs} is length 0, please supply a valid input")
   }
@@ -348,18 +454,21 @@ source_single_exprs <- function(exprs, env = parent.frame(), clean = TRUE,
   eval_helper <- paste(c(
     'template <typename F>',
     'SEXP cppally_eval(F&& f) {',
-    '  if constexpr (std::is_void_v<std::invoke_result_t<F>>) {',
+    '  r_vec<r_sexp> out(2);',
+    '  r_vec<r_str> nms(2);',
+    '  nms.set(0, r_str("is_void"));',
+    '  nms.set(1, r_str("result"));',
+    '  out.set_names(nms);',
+    '  using res_t = std::invoke_result_t<F>;',
+    '  if constexpr (std::same_as<res_t, void>) {',
     '    std::forward<F>(f)();',
-    '    return make_vec<r_sexp>(',
-    '      arg("is_void") = make_vec<r_lgl>(r_true),',
-    '      arg("result") = R_NilValue',
-    '    );',
+    '    out.set(0, r_sexp(r_vec<r_lgl>(1, r_true)));',
+    '    out.set(1, r_null);',
     '  } else {',
-    '    return make_vec<r_sexp>(',
-    '      arg("is_void") = make_vec<r_lgl>(r_false),',
-    '      arg("result") = cpp_to_r(std::forward<F>(f)())',
-    '    );',
+    '    out.set(0, r_sexp(r_vec<r_lgl>(1, r_false)));',
+    '    out.set(1, r_sexp(internal::cpp_to_r(std::forward<F>(f)())));',
     '  }',
+    '  return out;',
     '}'
   ), collapse = "\n")
   fun_names <- paste0("f", seq_along(exprs))
@@ -370,21 +479,22 @@ source_single_exprs <- function(exprs, env = parent.frame(), clean = TRUE,
   cpp_source(
     code = paste(c(
       "#include <cppally/r_dispatch.h>",
-      "#include <cppally.hpp>",
-      "#include <type_traits>",
-      "#include <utility>",
+      glue::glue("#include <{cppally_header}>"),
       "using namespace cppally;",
-      "using internal::cpp_to_r;",
-      "using internal::r_to_cpp;",
       eval_helper,
       bodies
     ), collapse = "\n"),
-    env = env, clean = clean, quiet = quiet,
-    debug = debug, cxx_std = cxx_std,
+    env = env,
+    clean = clean,
+    quiet = quiet,
+    debug = debug,
+    cxx_std = cxx_std,
     preserve_altrep = preserve_altrep,
     check_factors = check_factors,
     check_data_frames = check_data_frames,
     copy_on_modify = copy_on_modify,
+    openmp = openmp,
+    ...
   )
 }
 #' @rdname cpp_source
@@ -395,8 +505,12 @@ cpp_eval <- function(code, env = curr_env(), clean = TRUE,
                      check_factors = FALSE,
                      check_data_frames = FALSE,
                      copy_on_modify = FALSE,
+                     openmp = TRUE,
                      simplify = TRUE,
-                     cxx_std = Sys.getenv("CXX_STD", "CXX20")){
+                     cxx_std = Sys.getenv("CXX_STD", "CXX20"),
+                     cppally_header = c("cppally.hpp", "cppally_light.hpp"),
+                     ...){
+  cppally_header <- match.arg(cppally_header)
   curr_objs <- names(env)
   source_single_exprs(
     code, env = env, clean = clean,
@@ -405,7 +519,10 @@ cpp_eval <- function(code, env = curr_env(), clean = TRUE,
     check_factors = check_factors,
     check_data_frames = check_data_frames,
     copy_on_modify = copy_on_modify,
-    cxx_std = cxx_std
+    openmp = openmp,
+    cxx_std = cxx_std,
+    cppally_header = cppally_header,
+    ...
   )
   fn_names <- paste0("f", seq_along(code))
   fns <- mget(fn_names, envir = env)

@@ -1,28 +1,31 @@
 #ifndef CPPALLY_LIGHT_HPP
 #define CPPALLY_LIGHT_HPP
 
-// cppally API - Light version (In progress, don't use, recommend including cppally.hpp)
-// Includes only the absolute essentials
+// cppally API - Light version
+// Includes core header files (scalars, vectors, factors, data frames, attributes, and visit machinery).
 // License: MIT
 // Author: Nick Christofides
 
 #include <cppally/r_setup.h>
 #include <cppally/r_concepts.h> // Concepts and forward declarations
-#include <cppally/r_utils.h>
-#include <cppally/r_sexp.h>
-#include <cppally/r_types.h>
+#include <cppally/utils.h>
+#include <cppally/named_arg.h>
+#include <cppally/r_sexp/r_sexp.h>
+#include <cppally/scalar/scalars.h>
 #include <cppally/r_sym.h>
-#include <cppally/r_env.h>
-#include <cppally/r_limits.h>
-#include <cppally/r_nas.h>
-#include <cppally/r_scalar_ops.h>
-#include <cppally/r_vec.h>
-#include <cppally/r_attrs.h>
-#include <cppally/r_factor.h>
-#include <cppally/r_df.h>
-#include <cppally/r_visit.h>
-#include <cppally/r_length.h>
-#include <cppally/r_copy.h>
-#include <cppally/r_coerce.h>
+#include <cppally/r_function.h>
+#include <cppally/env.h>
+#include <cppally/scalar/r_limits.h>
+#include <cppally/na.h>
+#include <cppally/scalar/arithmetic_ops.h>
+#include <cppally/scalar/relational_ops.h>
+#include <cppally/vector/r_vector.h>
+#include <cppally/attributes/attributes.h>
+#include <cppally/factor/r_factors.h>
+#include <cppally/data_frame/r_df.h>
+#include <cppally/r_sexp/visit.h>
+#include <cppally/identical.h>
+#include <cppally/length.h>
+#include <cppally/coerce.h>
 
 #endif

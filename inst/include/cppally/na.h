@@ -1,0 +1,76 @@
+#ifndef CPPALLY_R_NAS_H
+#define CPPALLY_R_NAS_H
+
+#include <cppally/r_setup.h>
+#include <cppally/scalar/scalars.h>
+#include <cppally/scalar/arithmetic_ops.h> // for any_arithmetic_na
+
+namespace cppally {
+
+// NAs
+
+template <RVal T>
+inline constexpr std::remove_cvref_t<T> na() noexcept {
+  return std::remove_cvref_t<T>::na();
+}
+
+// Special case, it's technically not a valid NA but it is very useful for template programming, so it stays. 
+// `is_na()` for `r_sexp` does return false, which is correct.
+template<>
+inline r_sexp na<r_sexp>() noexcept {
+  return r_null;
+}
+
+template <typename T>
+inline constexpr bool is_na(const T& x) noexcept {
+  if constexpr (CastableToRScalar<T>){
+    return as_r_scalar_t<T>(x).is_na();
+  } else {
+    return false;
+  }
+}
+
+template <RVal T>
+inline constexpr bool is_na(const T& x) noexcept {
+  return x.is_na();
+}
+
+template <>
+inline constexpr bool is_na<r_sexp>(const r_sexp& x) noexcept {
+  return false;
+}
+
+template <typename T>
+inline constexpr bool is_nan(const T& x) noexcept {
+  if constexpr (CppFloatType<unwrap_t<T>>){
+    // NaN but not NA_REAL
+    return r_dbl(unwrap(x)).is_nan();
+  } else {
+    return false;
+  }
+}
+
+// Inspired by SQL COALESCE: returns x, or y if x is NA.
+// NOT intended for R's NULL (r_null in cppally).
+template <typename T>
+requires requires (const T& v) { is_na(v); }
+inline constexpr T coalesce(const T& x, const T& y) noexcept {
+  return is_na(x) ? y : x;
+}
+
+namespace internal {
+  
+template <typename T, typename U>
+constexpr bool either_na(const T& x, const U& y) noexcept {
+  if constexpr (requires { any_arithmetic_na(x, y); }) {
+    return any_arithmetic_na(x, y);
+  } else {
+    return is_na(x) || is_na(y);
+  }
+}
+
+}
+
+}
+
+#endif

@@ -1,0 +1,536 @@
+#ifndef CPPALLY_R_PROTECT_H
+#define CPPALLY_R_PROTECT_H
+
+#include <cppally/r_setup.h>
+#include <type_traits>
+#include <utility>
+#include <csetjmp>
+#include <cstdint> // For fixed-width int types
+
+namespace cppally {
+
+namespace internal {
+
+// Propagates an R unwind token through C++ frames.
+// Not a std::exception so that generic std::exception& catch handlers do not swallow it.
+struct unwind_exception {
+    SEXP token;
+    explicit unwind_exception(SEXP token_) : token(token_) {}
+};
+
+// One shared unwind continuation for the whole shared library.
+inline SEXP unwind_token() {
+    static SEXP token = [] {
+        SEXP res = R_MakeUnwindCont();
+        R_PreserveObject(res);
+        return res;
+    }();
+    return token;
+}
+
+inline void unwind_cleanup(void* jmpbuf_ptr, Rboolean jump) {
+    if (jump == TRUE) [[unlikely]] {
+        longjmp(*static_cast<std::jmp_buf*>(jmpbuf_ptr), 1);
+    }
+}
+
+CPPALLY_NOINLINE inline SEXP unwind_protect_impl(SEXP (*body)(void*), void* data) {
+    SEXP token = unwind_token();
+
+    std::jmp_buf jmpbuf;
+    if (setjmp(jmpbuf)) [[unlikely]] {
+        throw unwind_exception(token);
+    }
+    SEXP res = R_UnwindProtect(body, data, unwind_cleanup, &jmpbuf, token);
+    SETCAR(token, R_NilValue);
+    return res;
+}
+
+template <typename Fun>
+auto unwind_protect(Fun&& code) -> decltype(code()) {
+    using ReturnType = decltype(code());
+
+    constexpr bool void_res = std::is_void_v<ReturnType>;
+    constexpr bool sexp_res = std::is_same_v<ReturnType, SEXP>;
+
+    if constexpr (!sexp_res && !void_res) {
+        ReturnType result{};
+        unwind_protect([&] {
+            result = code();
+        });
+        return result;
+    } else {
+        SEXP res = unwind_protect_impl(
+            [](void* data) -> SEXP {
+                if constexpr (void_res){
+                    (*static_cast<std::decay_t<Fun>*>(data))();
+                    return R_NilValue;
+                } else {
+                    return (*static_cast<std::decay_t<Fun>*>(data))();
+                }
+            },
+            &code
+        );
+        return static_cast<ReturnType>(res);
+    }
+}
+
+// Forwarding non-trivially-copyable C++ objects through a C vararg function
+// (e.g. Rf_errorcall / Rf_warningcall) is undefined behaviour. These helpers
+// are printf-style; only POD types and `const char*` are valid. The static
+// assert catches accidental `std::string` etc at compile time -- use .c_str().
+template <typename... Args>
+inline constexpr bool all_vararg_safe_v =
+    (std::is_trivially_copyable_v<std::decay_t<Args>> && ...);
+
+// The `safe` syntax wrapper
+struct protect {
+    template <typename F>
+    constexpr auto operator[](F* raw_func) const {
+        return [raw_func](auto&&... args) -> decltype(raw_func(std::forward<decltype(args)>(args)...)) {
+            return unwind_protect([&] {
+                return raw_func(std::forward<decltype(args)>(args)...);
+            });
+        };
+    }
+    template <typename F>
+    constexpr auto operator()(F&& raw_func) const {
+        return operator[](std::forward<F>(raw_func));
+    }
+};
+
+}
+
+constexpr internal::protect safe = {};
+
+inline void check_user_interrupt() { safe[R_CheckUserInterrupt](); }
+
+// Check for R interruption, increment `counter` by 1, and reset it to 0 every `every` iterations
+// Assuming `every` is a large number, this is a fast check because the branch should be well predicted (tagged with [[unlikely]])
+inline void check_for_interruption_and_reset_counter(r_size_t& counter, r_size_t every = 1e06){
+    if (++counter >= every) [[unlikely]] {
+        check_user_interrupt();
+        counter = 0;
+    }
+}
+
+template <typename... Args>
+[[noreturn]] void abort(const char* msg, Args... args) {
+    static_assert(internal::all_vararg_safe_v<Args...>,
+        "abort() forwards args into a C vararg function; all args must be "
+        "trivially copyable (use .c_str() for std::string)");
+    internal::unwind_protect([&] { Rf_errorcall(R_NilValue, msg, args...); });
+    CPPALLY_UNREACHABLE();
+}
+
+[[noreturn]] inline CPPALLY_NOINLINE void abort(const char* msg) {
+    internal::unwind_protect([&] { Rf_errorcall(R_NilValue, "%s", msg); });
+    CPPALLY_UNREACHABLE();
+}
+
+template <typename... Args>
+void warn(const char* msg, Args... args) {
+    static_assert(internal::all_vararg_safe_v<Args...>,
+        "warn() forwards args into a C vararg function; all args must be "
+        "trivially copyable (use .c_str() for std::string)");
+    safe[Rf_warningcall](R_NilValue, msg, args...);
+}
+
+inline void warn(const char* msg) {
+    safe[Rf_warningcall](R_NilValue, "%s", msg);
+}
+
+template <typename... Args>
+void print(const char* msg, Args... args) {
+    static_assert(internal::all_vararg_safe_v<Args...>,
+        "print() forwards args into a C vararg function; all args must be "
+        "trivially copyable (use .c_str() for std::string)");
+    Rprintf(msg, args...);
+}
+
+inline void print(const char* msg) {
+    Rprintf("%s", msg);
+}
+
+namespace internal {
+namespace vec_store {
+
+// ---------------------------------------------------------------------------
+// Chunked VECSXP-backed protection pool
+//
+// The pool is a singly-linked chain of "chunks". Each chunk is one VECSXP
+// (independently R_PreserveObject'd) plus a small C++ control block:
+//
+//   chunk { vec=VECSXP[capacity], capacity, free_count, free_stack[capacity],
+//           next, free_next }
+//
+// Slot lifetime within a chunk is tracked by a per-chunk LIFO freelist of
+// integer slot indices (`free_stack`). Insert pops the next free slot and
+// writes the protected SEXP via SET_VECTOR_ELT (write-barrier safe). Release
+// clears the slot back to R_NilValue and pushes the index onto free_stack.
+//
+// Two intrusive lists are threaded through `chunk`, both doubly linked so
+// every link/unlink is O(1):
+//   * `next`/`prev`           -- master allocation chain (every chunk that
+//                                currently exists; destroy_chunk unlinks).
+//                                Used for diagnostics (count/print) and for
+//                                O(1) unlink in destroy_chunk.
+//   * `free_next`/`free_prev` -- the "has free slots" list. A chunk is on
+//                                this list iff its free_count > 0. Insert
+//                                and release are O(1) on every path, hot or
+//                                cold -- there is no chain walk anywhere.
+//                                When a chunk fills, it is unlinked from the
+//                                free list; when a previously-full chunk has
+//                                a slot released, it is pushed back on.
+//
+// New chunks double in capacity from `min_chunk_size` up to `max_chunk_size`.
+// Crucially, growing the pool means *appending* a new chunk -- existing
+// chunks are never copied or moved, so all outstanding `slot_ref` tokens
+// remain valid forever
+//
+// Memory behaviour:
+//   * The pool tracks the actual current working set, not the historical
+//     peak. When a chunk becomes entirely empty (free_count == capacity)
+//     it is R_ReleaseObject'd and freed in `release()`, with two exceptions:
+//     we always keep at least one chunk alive as a scratchpad to avoid
+//     allocate-then-free thrashing at burst boundaries, and watermark-sized
+//     empties are retained up to a slot budget (16384)
+//     so that repeated protection bursts do not pay one Rf_allocVector +
+//     R_PreserveObject per burst.
+//   * Only chunks of the current watermark size are eligible for the
+//     reserve. Smaller chunks are historical warmup sizes -- `next_size`
+//     never shrinks, so they would never be allocated again -- and retaining
+//     them would eat the budget the actually-reused size needs.
+//   * This matters because R's GC marks every slot of a VECSXP up to its
+//     length, not just the populated ones -- a 16384-slot chunk holding
+//     three live objects still costs ~16384 pointer reads per GC cycle.
+//     Releasing empty chunks keeps GC scan cost proportional to actual
+//     working-set size.
+//   * `next_size` (chunk capacity for the next allocation) is watermark-
+//     only: it never shrinks. Once it reaches max_chunk_size all subsequent
+//     chunks are allocated at that size. The reasoning: if we needed a big
+//     chunk once, we'll likely need one again, and over-allocating beats
+//     repeated doubling on every burst.
+//   * `protect_cell` C++ control blocks are recycled via a small freelist
+//     and never released back to the heap. Bounded by peak concurrent
+//     refcount-distinct r_sexp count, which is small in practice.
+//
+// Threading:
+//   * Not thread-safe. All state (head_chunk, free_list_head, the per-chunk
+//     free_stack and free_count) is shared process-global with no locking.
+//     This matches R itself, which is single-threaded -- the R API is not
+//     reentrant from parallel threads. **Do not construct r_sexp / r_str /
+//     r_vec from inside an OpenMP parallel region.** Read-only access via
+//     view_tag or r_str_view is safe because it never touches the pool.
+//
+// Trade-offs vs the previous cons-cell linked list:
+//   + 1 R-side allocation per *chunk* instead of 1 per cell -- far fewer
+//     calls into R's allocator and far fewer GC roots.
+//   + Linear memory layout: chunk slots are contiguous, so the hot path
+//     touches one cache line for many consecutive inserts/releases.
+//   + Slightly larger token (chunk* + int instead of a single SEXP), but
+//     refcount means most copies don't allocate a token at all.
+//   - Per-chunk freelist introduces a tiny C++-side allocation (`new int[]`),
+//     amortised across the entire chunk.
+// ---------------------------------------------------------------------------
+
+struct chunk {
+    SEXP   vec;         // VECSXP, R_PreserveObject'd
+    int    capacity;
+    int    free_count;  // slots currently free in this chunk
+    int*   free_stack;  // [capacity] indices of free slots (LIFO)
+    chunk* next;        // master allocation chain (forward link)
+    chunk* prev;        // master allocation chain (back link, for O(1) unlink)
+    chunk* free_next;   // "has free slots" list, forward; nullptr if full
+    chunk* free_prev;   // "has free slots" list, back; nullptr if full or head
+    bool   reserved;    // entirely empty and counted in the retained reserve
+
+    bool is_full()  const noexcept { return free_count == 0; }
+    bool is_empty() const noexcept { return free_count == capacity; }
+};
+
+// Token returned by insert; opaque to callers other than `release`.
+// Refcounting already handles nullptr and R_NilValue, so c is always a live chunk
+struct slot_ref {
+    chunk* c;     // owning chunk
+    int    slot;  // index within c->vec
+};
+
+//   head_chunk     -- master chain of every chunk that currently exists
+//   free_list_head -- head of the intrusive "has free slots" list
+//   watermark_size -- capacity of the largest chunk allocated so far
+//   reserved_slots -- total capacity of currently-retained empty chunks
+inline chunk* head_chunk     = nullptr;
+inline chunk* free_list_head = nullptr;
+inline int    watermark_size = 0;
+inline int    reserved_slots = 0;
+
+inline void master_push(chunk* c) noexcept {
+    c->prev = nullptr;
+    c->next = head_chunk;
+    if (c->next != nullptr) {
+        c->next->prev = c;
+    }
+    head_chunk = c;
+}
+
+inline void master_unlink(chunk* c) noexcept {
+    if (c->prev != nullptr) {
+        c->prev->next = c->next;
+    } else {
+        head_chunk = c->next;
+    }
+    if (c->next != nullptr) {
+        c->next->prev = c->prev;
+    }
+    c->next = nullptr;
+    c->prev = nullptr;
+}
+
+inline void free_push(chunk* c) noexcept {
+    c->free_prev = nullptr;
+    c->free_next = free_list_head;
+    if (c->free_next != nullptr) {
+        c->free_next->free_prev = c;
+    }
+    free_list_head = c;
+}
+
+inline void free_unlink(chunk* c) noexcept {
+    if (c->free_prev != nullptr) {
+        c->free_prev->free_next = c->free_next;
+    } else {
+        free_list_head = c->free_next;
+    }
+    if (c->free_next != nullptr) {
+        c->free_next->free_prev = c->free_prev;
+    }
+    c->free_next = nullptr;
+    c->free_prev = nullptr;
+}
+
+// Keep alive if the only chunk
+inline bool is_sole_chunk(const chunk* c) noexcept {
+    return head_chunk == c && c->next == nullptr;
+}
+
+// Start at 1024 slots: skips two doublings of warmup so the first
+// ~thousand protections in any .Call doesn't trigger any growth, while
+// staying small enough that GC scan cost stays trivial when the chunk
+// is sparsely populated)
+inline constexpr int min_chunk_size     = 1024;
+inline constexpr int max_chunk_size     = 16384;
+inline constexpr int max_reserved_slots = 16384;  // Reserve slots for when all (except 1) slots are destroyed to avoid warmup
+
+// Allocate a new chunk and push it onto both the master chain and the
+// free list. Capacity doubles each time, capped at `max_chunk_size`. Caller
+// is responsible for protecting any SEXPs that must outlive this allocation.
+inline CPPALLY_NOINLINE chunk* add_chunk() {
+
+    static int next_size = min_chunk_size;
+
+    int cap = next_size;
+
+    SEXP v = cppally::internal::unwind_protect([cap]{
+        SEXP v_local = Rf_allocVector(VECSXP, cap);
+        R_PreserveObject(v_local);
+        return v_local;
+    });
+
+    chunk* c = new chunk{};
+    c->vec        = v;
+    c->capacity   = cap;
+    c->free_count = cap;
+    c->free_stack = new int[cap];
+    // Fill the freelist so slot 0 is popped first (LIFO).
+    for (int i = 0; i < cap; ++i) {
+        c->free_stack[i] = cap - 1 - i;
+    }
+
+    master_push(c);
+    free_push(c);
+
+    if (next_size < max_chunk_size) {
+        next_size *= 2;
+    }
+    watermark_size = cap;
+    return c;
+}
+
+// Permanently free a chunk: unlink from both lists, release the VECSXP back
+// to R, and delete the C++ control block. Caller must guarantee `c` has no
+// live slots, that it is on the free list (free_count > 0), and that it is
+// not the only chunk in existence.
+inline void destroy_chunk(chunk* c) noexcept {
+    master_unlink(c);
+    free_unlink(c);
+
+    R_ReleaseObject(c->vec);
+    delete[] c->free_stack;
+    delete c;
+}
+
+inline slot_ref insert(SEXP x) {
+    chunk* c = free_list_head;
+    if (c == nullptr) [[unlikely]] {
+        // Every chunk is full (or none exist). Allocate a new one.
+        // Allocation may GC, so PROTECT x. This cold path runs only when
+        // the pool needs a new chunk — effectively never after warmup.
+
+        // This can technically longjump (due to protection stack overflow) but should be almost impossible unless 
+        // the user is calling Rf_protect() many times themselves.
+        // As always, R C API usage is discouraged when using cppally, especially manual protection.
+        Rf_protect(x);
+        c = add_chunk();
+        Rf_unprotect(1);
+    }
+
+    int slot = c->free_stack[--c->free_count];
+    SET_VECTOR_ELT(c->vec, slot, x);
+
+    // Taking a slot from a retained empty chunk brings it back into service.
+    if (c->reserved) [[unlikely]] {
+        c->reserved = false;
+        reserved_slots -= c->capacity;
+    }
+
+    // If this chunk just became full, unlink it from the free list.
+    if (c->is_full()) [[unlikely]] {
+        free_unlink(c);
+    }
+
+    return {c, slot};
+}
+
+inline void release(slot_ref ref) noexcept {
+    chunk* c = ref.c;
+    SET_VECTOR_ELT(c->vec, ref.slot, R_NilValue);
+
+    bool was_full = c->is_full();
+    c->free_stack[c->free_count++] = ref.slot;
+
+    // If the chunk was full, it wasn't on the free list -- put it back.
+    if (was_full) [[unlikely]] {
+        free_push(c);
+    }
+
+    // The chunk is now entirely empty. A sole chunk is always kept alive as
+    // a scratchpad, and stays unreserved -- checking that first keeps the
+    // one-object insert/release ping-pong on the exact pre-reserve path,
+    // with no accounting work. Otherwise, retain the chunk in the reserve
+    // if it is watermark-sized and fits the budget (the next burst then
+    // reuses it with no R-side allocation), or free it back to R (stale
+    // warmup size, budget full) so GC scan cost stays proportional to the
+    // working set.
+    if (c->is_empty() && !is_sole_chunk(c)) [[unlikely]] {
+        if (c->capacity == watermark_size &&
+            (reserved_slots + c->capacity) <= max_reserved_slots) {
+            c->reserved = true;
+            reserved_slots += c->capacity;
+        } else {
+            destroy_chunk(c);
+        }
+    }
+}
+
+inline r_size_t count() {
+    r_size_t n = 0;
+    for (chunk* c = head_chunk; c != nullptr; c = c->next) {
+        n += (c->capacity - c->free_count);
+    }
+    return n;
+}
+
+inline void print() {
+    REprintf("vec_store:\n");
+    int idx = 0;
+    for (chunk* c = head_chunk; c != nullptr; c = c->next, ++idx) {
+        REprintf("  chunk %d: vec=%p capacity=%d in_use=%d%s\n",
+                 idx, reinterpret_cast<void*>(c->vec),
+                 c->capacity, c->capacity - c->free_count,
+                 c->reserved ? " (reserved)" : "");
+    }
+    REprintf("---\n");
+}
+
+} // namespace vec_store
+
+// ---------------------------------------------------------------------------
+// Refcounted protection tokens.
+//
+// A `protect_cell` is a tiny C++ control block that owns one slot in the
+// chunked VECSXP pool above. Multiple r_sexp wrappers can share the same
+// protect_cell via refcounting -- copy construction just bumps `refs`
+// instead of taking a new pool slot.
+//
+// `protect_cell` instances themselves are recycled from a C++-side freelist,
+// so in the steady state there is zero heap allocation on either the R side
+// (slots come from an existing chunk) or the C++ side.
+// ---------------------------------------------------------------------------
+
+namespace refcount {
+
+struct protect_cell {
+    vec_store::slot_ref token; // slot in the chunked VECSXP pool
+    std::uint32_t       refs;  // how many r_sexps point at this control block
+    protect_cell*       next;  // freelist link (only valid while on freelist)
+};
+
+// C++-side freelist of recycled protect_cell instances. Not thread-safe,
+// but R itself is single-threaded.
+inline protect_cell* free_list = nullptr;
+
+inline protect_cell* alloc_cell() {
+    if (free_list != nullptr) {
+        protect_cell* p = free_list;
+        free_list = p->next;
+        return p;
+    }
+    return new protect_cell{};
+}
+
+inline void free_cell(protect_cell* p) {
+    p->next = free_list;
+    free_list = p;
+}
+
+// Create a new protection token for `x`. Returns nullptr for R_NilValue.
+//
+// Order matters: do the R-side work *first*. vec_store::insert may throw an
+// unwind_exception from a failed Rf_allocVector inside add_chunk. If we
+// allocated the C++ control block first, that throw would leak it -- the
+// cell is neither attached to anything nor returned to the freelist.
+inline protect_cell* insert(SEXP x) {
+    if (x == R_NilValue) {
+        return nullptr;
+    }
+    auto token = vec_store::insert(x); // may throw -- nothing to clean up yet
+    protect_cell* p = alloc_cell();
+    p->token = token;
+    p->refs  = 1;
+    p->next  = nullptr;
+    return p;
+}
+
+// Bump the refcount. Safe to call with nullptr.
+inline void incref(protect_cell* p) noexcept {
+    if (p != nullptr) {
+        ++p->refs;
+    }
+}
+
+// Drop a reference. When the count hits zero, release the pool slot and
+// recycle the control block.
+inline void decref(protect_cell* p) noexcept {
+    if (p != nullptr && --p->refs == 0) {
+        vec_store::release(p->token);
+        free_cell(p);
+    }
+}
+
+} // namespace refcount
+} // namespace internal
+
+} // namespace cppally
+
+#endif 

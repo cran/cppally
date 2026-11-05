@@ -1,0 +1,279 @@
+#ifndef CPPALLY_R_HASH_H
+#define CPPALLY_R_HASH_H
+
+#include <cppally/vector/r_vector.h>
+#include <cppally/r_sexp/visit.h>
+#include <cppally/attributes/attributes.h>
+#include <cppally/identical.h>
+#include <cppally/random/random_stream.h>
+#include <cppally/std_compat.h>
+#include <algorithm>
+#include <cmath>
+#include <ankerl/unordered_dense.h> // Hash maps for group IDs + unique + match
+
+// Hash functions + hash equality operators for RVal and RVector
+
+namespace cppally {
+
+namespace internal {
+
+// Different NaN have different bit representations so this normalises NaN hashing, and r_dbl::nan is guaranteed to not collide with r_dbl::na
+inline consteval uint64_t nan_bits() noexcept {
+    return internal::bit_cast<uint64_t>(static_cast<double>(r_dbl::nan()));
+}
+
+inline consteval uint64_t na_real_bits() noexcept {
+    return internal::bit_cast<uint64_t>(static_cast<double>(na<r_dbl>()));
+}
+
+// Hashing
+
+// Hash combine helper
+inline uint64_t hash_combine(uint64_t seed, uint64_t value) noexcept {
+    return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+} 
+
+// High quality 64-bit mixer from murmurhash
+inline constexpr uint64_t mix_u64(uint64_t x) noexcept {
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53ULL;
+    x ^= x >> 33;
+    return x;
+}
+
+inline consteval uint64_t na_real_hash() noexcept {
+    return mix_u64(na_real_bits());
+}
+inline consteval uint64_t nan_hash() noexcept {
+    return mix_u64(nan_bits());
+}
+
+template <RIntegerType T>
+inline uint64_t r_hash_impl(const T& x) noexcept {
+    return mix_u64(static_cast<uint64_t>(unwrap(x)));
+};
+
+template <RScalar T>
+inline uint64_t r_hash_impl(const T& x) noexcept {
+
+    using value_type = typename std::remove_cvref_t<T>::value_type;
+
+    if constexpr (RScalar<value_type>){
+        return r_hash_impl(static_cast<value_type>(x));
+    } else {
+        // Fallback
+        return ankerl::unordered_dense::hash<unwrap_t<T>>{}(unwrap(x));
+    }
+};
+
+template<>
+inline uint64_t r_hash_impl(const r_dbl& x) noexcept {
+    if (is_na(x)){
+        // Checks that x matches exactly to R's NA_REAL
+        return has_na_real_payload(x) ? na_real_hash() : nan_hash();
+    } else {
+        // Hash normal double
+        // +0.0 to normalise -0.0 and 0.0 
+        return mix_u64(internal::bit_cast<uint64_t>(unwrap(x) + 0.0));
+    }
+};
+
+template<>
+inline uint64_t r_hash_impl(const r_cplx& x) noexcept {
+        // Hash real and imag parts and mix
+        return hash_combine(r_hash_impl(x.re()), r_hash_impl(x.im()));
+};
+
+template<>
+inline uint64_t r_hash_impl(const r_str_view& x) noexcept {
+    // Cast pointer to integer (uintptr_t)
+    auto ptr_val = reinterpret_cast<uintptr_t>(unwrap(x));
+    
+    // Scramble the bits
+    // We use ankerl's built-in wyhash mixer. It's just a multiply + XOR.
+    return ankerl::unordered_dense::detail::hash_int(ptr_val);
+};
+
+inline uint64_t r_hash_impl(r_sym x) noexcept {
+    auto ptr_val = reinterpret_cast<uintptr_t>(unwrap(x));
+    return ankerl::unordered_dense::detail::hash_int(ptr_val);
+};
+
+// Vector hashing
+
+inline uint64_t r_hash_impl(const r_sexp& x);
+
+// Defined below
+inline uint64_t hash_attrs(const r_sexp& x, uint64_t seed);
+
+template <RVector T>
+uint64_t r_hash_impl(const T& x) {
+        
+    if (x.is_null()) return 0;
+    r_size_t n = x.length();
+    // Initialise the seed using the hashed vector type
+    uint64_t seed = r_hash_impl(r_int(static_cast<int>(r_typeof<T>)));
+    // Hash the attributes list if it exists
+    if (attr::has_attrs(x)){
+        seed = hash_attrs(static_cast<r_sexp>(x), seed);
+    }
+    // Recursively combine hashes of elements (even if elements are vectors)
+    for (r_size_t i = 0; i < n; ++i) {
+        seed = hash_combine(seed, r_hash_impl(x.view(i)));
+    }
+    return seed;
+};
+
+inline uint64_t hash_attrs(const r_sexp& x, uint64_t seed) {
+    
+    r_vec<r_sexp> attrs = attr::get_attrs(x);
+
+    seed = hash_combine(seed, r_hash_impl(attrs.names()));
+    r_size_t n = attrs.length();
+    for (r_size_t i = 0; i < n; ++i){
+        seed = hash_combine(seed, r_hash_impl(attrs.view(i)));
+    }
+    return seed;
+}
+
+inline uint64_t r_hash_impl(const r_factors& x) {
+    return r_hash_impl(x.value);
+};
+
+inline uint64_t r_hash_impl(const r_df& x) {
+    return r_hash_impl(x.value);
+};
+
+inline uint64_t r_hash_impl(const r_sexp& x) {
+    return r_sexp_view(x, CPPALLY_MAKE_VISITOR(uint64_t, v, r_hash_impl(v)));
+}
+
+template <typename T>
+struct r_hash_fn_impl {
+    using is_avalanching = void; // Tells ankerl this is already a good quality hash
+    using is_transparent = void;
+    // For hash map memory efficiency we use the underlying type
+    using base_t = unwrap_t<T>;
+    uint64_t operator()(const base_t& x) const noexcept(RScalar<T>) {
+        return r_hash_impl(internal::unsafe_reconstruct_view<T>(x));
+    }
+};
+
+// Hash equality
+
+template <typename T>
+struct r_hash_eq_impl {
+
+    using is_transparent = void;
+    using base_t = unwrap_t<T>;
+
+    bool operator()(const base_t& a, const base_t& b) const noexcept(RScalar<T>) {
+        return identical(internal::unsafe_reconstruct_view<T>(a), internal::unsafe_reconstruct_view<T>(b));
+    }
+};
+
+template <typename T>
+using r_hash_fn = r_hash_fn_impl<r_base_scalar_t<T>>;
+template <typename T>
+using r_hash_eq = r_hash_eq_impl<r_base_scalar_t<T>>;
+
+// An extension of Chao's estimator of population size based on the first three capture frequency counts
+// doi:10.1016/j.csda.2011.01.017
+template <
+    typename key,
+    typename storage,
+    typename hash,
+    typename comparator
+>
+inline uint64_t unique_count_estimate(const key *px, uint64_t data_size){
+    
+    if (data_size == 0){
+        return 0;
+    }
+
+    // Bigger sample size mainly reduces skew bias and variance
+    uint64_t sample_size = static_cast<uint64_t>(std::sqrt(2.0 * data_size)) + 1u;
+
+    // Setup RNG engine using custom seed
+    random_stream rs(mix_u64(data_size));
+
+    ankerl::unordered_dense::map<key, storage, hash, comparator> counts;
+    counts.reserve(sample_size);
+
+    uint64_t f1 = 0;
+    uint64_t f2 = 0;
+    uint64_t f3 = 0;
+
+    for (uint64_t i = 0; i < sample_size; ++i) {
+
+        r_size_t sample_pick = rs.index(0, static_cast<r_size_t>(data_size) - 1);
+        storage& count = counts[px[sample_pick]];
+        ++count;
+
+        if (count == 1) {
+            // Increase number of singletons by 1
+            ++f1;
+        } else if (count == 2) {
+            // Increase number of doubletons by 1
+            // Since this is a doubleton, we decrease the singleton count by 1
+            --f1;
+            ++f2;
+        } else if (count == 3) {
+            // Increase number of tripletons by 1
+            // Decrease count of doubletons by 1
+            --f2;
+            ++f3;
+        } else if (count == 4){
+            // Appears more than 3 times, hence decrease tripleton count by 1
+            --f3;
+        }
+    }
+
+    uint64_t est = counts.size();
+
+    // chao1 estimator formula
+    // chao1 = n_obs + ( (f1) * (f1-1) ) / ( 2 * (f2+1) )
+    //
+    // Lanumteang & Bohning extension - used when f2 and f3 are both > 10
+    // Extended chao1 estimator formula
+    // chao1_ext = n_obs + ( (3f1f3) / (2f2^2) ) * ( (f1^2) / (2f2) ) = n_obs + ( (3f1^3f3) / (4f2^3) )
+
+    if (f2 > 5 && f3 > 5) {
+        est += (3 * f1 * f1 * f1 * f3) / (4 * f2 * f2 * f2);
+    } else if (f1 > 1) {
+        est += (f1 * (f1 - 1)) / (2 * (f2 + 1));
+    }
+
+    return std::min(est, data_size);
+}
+
+// Initial guess of unique size N/4
+// sampling is used where possible to refine the guess
+template <RVector T, typename U>
+inline uint64_t get_hash_map_reserve_size(const U *px, uint64_t data_size) {
+
+    // Logical vectors can only have at most 3 unique elements
+    if constexpr (is<T, r_vec<r_lgl>>){
+        return 8;
+    } else {
+
+        using data_t = typename T::data_type;
+
+        // Just a guess (nothing informing this)
+        if (data_size < static_cast<uint64_t>(internal::exp2(16))){
+            return data_size / 4;
+        }
+
+        // Some adhoc benchmarks indicate that over-reserving for low cardinality data is faster when using ankerl::unordered_dense::map
+        // For high cardinality, we cap it to the data size
+        return std::min(data_size, 2 * unique_count_estimate<U, int, r_hash_fn<data_t>, r_hash_eq<data_t>>(px, data_size));
+    }
+}
+
+}
+
+}
+
+#endif

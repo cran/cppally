@@ -74,6 +74,17 @@ is_lvalue_ref_arg <- function(x){
     !grepl("^\\s*const\\b", x, perl = TRUE)
 }
 
+# Is C++ arg a std::optional, e.g. std::optional<r_int> x
+is_optional_arg <- function(x){
+  grepl("^\\s*(const\\s+)?(::\\s*)?(std\\s*::\\s*)?optional\\s*<", x, perl = TRUE)
+}
+
+# std::optional args default to NULL in R, i.e. never supplied
+r_formals <- function(args){
+  args$formal <- ifelse(is_optional_arg(args$type), paste0(args$name, " = NULL"), args$name)
+  glue_collapse_data(args, "{formal}")
+}
+
 is_header <- function(x){
   file_extension(x) %in% c(".h", ".hpp")
 }
@@ -117,6 +128,7 @@ get_registered_functions <- function(decorations, tag, quiet = !is_interactive()
   out$functions <- lapply(out$context, parse_cpp_function, is_attribute = TRUE)
   is_template <- vapply(out$functions, \(x) attr(x, "cpp_template"), TRUE)
   out <- vctrs::vec_cbind(out, vctrs::vec_rbind(!!!out$functions))
+  check_no_default_args(out)
   out$is_template <- is_template
   out$template_params <- lapply(out$context, function(x) {
     # Combine context lines into one string for regex
@@ -157,7 +169,7 @@ generate_cpp_functions <- function(funs, package = "cppally") {
     glue::glue_data(funs,
                     '
     // {basename(file)}
-    extern "C" SEXP _{package}_{name}({sexp_params}) {{
+    extern "C" attribute_visible SEXP _{package}_{name}({sexp_params}) {{
       BEGIN_CPPALLY
       {calls}
       END_CPPALLY
@@ -168,7 +180,7 @@ generate_cpp_functions <- function(funs, package = "cppally") {
                     '
     // {basename(file)}
     {declaration}
-    extern "C" SEXP _{package}_{name}({sexp_params}) {{
+    extern "C" attribute_visible SEXP _{package}_{name}({sexp_params}) {{
       BEGIN_CPPALLY
       {calls}
       END_CPPALLY
@@ -179,6 +191,21 @@ generate_cpp_functions <- function(funs, package = "cppally") {
 
   out <- glue::glue_collapse(out, sep = "\n")
   unclass(out)
+}
+
+check_no_default_args <- function(funs) {
+  has_default <- vapply(funs$args, function(a) any(!is.na(a$default)), logical(1))
+  if (any(has_default)) {
+    bad <- vctrs::vec_slice(funs, has_default)
+    bad$defaulted <- vcapply(bad$args, function(a) paste(a$name[!is.na(a$default)], collapse = ", "))
+    msgs <- glue::glue_data(bad, "- `{name}` (args: {defaulted}) on line {line} in '{basename(file)}'.")
+    cli::cli_abort(
+      c(
+        "C++ default arguments are not supported in registered functions.",
+        {msgs}
+      )
+    )
+  }
 }
 
 check_init_signatures <- function(funs) {
@@ -251,6 +278,7 @@ generate_r_functions <- function(funs, package = "cppally", use_package = FALSE)
 
   funs$package <- package
   funs$package_call <- package_call
+  funs$formals <- vcapply(funs$args, r_formals)
   funs$list_params <- vcapply(funs$args, glue_collapse_data, "{name}")
   funs$params <- vcapply(funs$list_params, function(x) if (nzchar(x)) paste0(", ", x) else x)
   is_void <- type_is_void(funs$return_type)
@@ -260,7 +288,7 @@ generate_r_functions <- function(funs, package = "cppally", use_package = FALSE)
   )
 
   out <- glue::glue_data(funs, '
-    {name} <- function({list_params}) {{
+    {name} <- function({formals}) {{
       {calls}
     }}
     ')
@@ -323,9 +351,9 @@ wrap_call_template <- function(name, return_type, args, template_params) {
   template_args_def <- paste(paste0("typename ", template_params), collapse = ", ")
 
   # Construct the lambda parameters (ALL args)
-  lambda_params <- glue::glue_collapse(glue::glue("SEXP {args$name}_internal"), ", ")
+  lambda_params <- glue::glue_collapse(glue::glue("SEXP {args$name}_sexp"), ", ")
 
-  conversions <- glue::glue("r_to_cpp<{args$type}>({args$name}_internal)")
+  conversions <- glue::glue("r_to_cpp<{args$type}>({args$name}_sexp)")
 
   # Only an lvalue-reference param needs a named lvalue to bind to, since `as<>()`
   # returns a prvalue. By-value and `&&` bind the prvalue directly, so they are
@@ -451,6 +479,7 @@ check_valid_attributes <- function(decorations, file = decorations$file) {
 
   }
 }
+
 # Tweaked version of cpp11::cpp_register
 
 #' Generates wrappers for registered C++ functions
@@ -464,6 +493,10 @@ check_valid_attributes <- function(decorations, file = decorations$file) {
 #' @param quiet If `TRUE` suppresses output from this function.
 #' @param extension The file extension to use for the generated src/cppally file.
 #' Options are either '.cpp' (the default) or '.cc'.
+#' @param cppally_header Which header should be
+#' included with the registered C++ code? The default is the full library
+#' "cppally.hpp". Choose "cppally_light.hpp" for the lighter header, which may
+#' provide quicker compile times, at the cost of less features.
 #'
 #' @returns
 #' The paths to the generated R and C++ source files.
@@ -471,9 +504,15 @@ check_valid_attributes <- function(decorations, file = decorations$file) {
 #' @seealso [cpp_source]
 #'
 #' @export
-cpp_register <- function(path = ".", quiet = !is_interactive(), extension = c(".cpp", ".cc")) {
+cpp_register <- function(
+    path = ".",
+    quiet = !is_interactive(),
+    extension = c(".cpp", ".cc"),
+    cppally_header = c("cppally.hpp", "cppally_light.hpp")
+) {
   stop_unless_installed(get_cpp_register_needs())
   extension <- match.arg(extension)
+  cppally_header <- match.arg(cppally_header)
 
   r_path <- file.path(path, "R", "cppally.R")
   src_path <- file.path(path, "src")
@@ -537,22 +576,15 @@ cpp_register <- function(path = ".", quiet = !is_interactive(), extension = c(".
                                                n_args = viapply(funs$args, nrow)
   )
 
-  cpp_function_registration <- glue::glue_collapse(cpp_function_registration, sep  = "\n")
-
-  extra_includes <- character()
-  extra_includes <- paste0(extra_includes, collapse = "\n")
+  cpp_function_registration <- glue::glue_collapse(cpp_function_registration, sep = "\n")
 
   user_header_files <- unique(funs$file[is_header(funs$file)])
-  user_includes <- glue::glue('#include "{basename(user_header_files)}"')
-  user_includes <- paste0(user_includes, collapse = "\n")
+  user_includes <- paste0(c("", glue::glue('#include "{basename(user_header_files)}"')), collapse = "\n")
 
   # Adjust in the case of 0-registered fns but
   # 1 or more cppally::init declarations
-  user_includes <- paste0("", user_includes)
-  extra_includes <- paste0("", extra_includes)
   cpp_functions_definitions <- paste0("", cpp_functions_definitions)
   init_declarations <- paste0("", init$declarations)
-  init_calls <- paste0("", init$calls)
 
   if (length(call_entries) == 0 || (length(call_entries) == 1 && call_entries == "")){
     call_method_def <- 'static const R_CallMethodDef CallEntries[] = {
@@ -566,11 +598,9 @@ cpp_register <- function(path = ".", quiet = !is_interactive(), extension = c(".
       // Generated by cppally: do not edit by hand
       // clang-format off
 
-      {extra_includes}
       #include <cppally/r_dispatch.h>
-      #include <cppally.hpp>
-      #include <R_ext/Visibility.h>
-      {user_includes}
+      #include <{cppally_header}>
+      #include <R_ext/Visibility.h>{user_includes}
 
       using namespace cppally;
       using internal::cpp_to_r;
@@ -584,9 +614,15 @@ cpp_register <- function(path = ".", quiet = !is_interactive(), extension = c(".
       }}
 
       {init_declarations}
+      static SEXP cppally_init([[maybe_unused]] DllInfo* dll){{
+        BEGIN_CPPALLY{init$calls}
+        END_CPPALLY
+      }}
+
       extern "C" attribute_visible void R_init_{package}(DllInfo* dll){{
         R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
-        R_useDynamicSymbols(dll, FALSE);{init_calls}
+        R_useDynamicSymbols(dll, FALSE);
+        cppally_init(dll);
         R_forceSymbols(dll, TRUE);
       }}
       ',

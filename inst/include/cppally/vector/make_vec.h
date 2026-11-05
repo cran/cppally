@@ -1,0 +1,64 @@
+#ifndef CPPALLY_R_MAKE_VEC_H
+#define CPPALLY_R_MAKE_VEC_H
+
+#include <cppally/r_setup.h>
+#include <cppally/named_arg.h>
+#include <cppally/vector/r_vector.h>
+#include <cppally/attributes/attributes.h>
+#include <cppally/coerce.h>
+
+namespace cppally {
+
+// ── make_vec ─────────────────────────────────────────────────────
+template <RVal T, typename... Args>
+r_vec<T> make_vec(Args... args) {
+
+  constexpr int n = sizeof...(args);
+
+  if constexpr (n == 0){
+    return r_vec<T>();
+  } else {
+
+    r_vec<T> out(n);
+
+    constexpr bool any_named = (NamedArg<Args> || ...);
+
+    r_vec<r_str_view> nms = any_named ? r_vec<r_str_view>(n) : r_vec<r_str_view>(r_null);
+
+    int i = 0;
+    (([&]() {
+      if constexpr (NamedArg<Args>) {
+        out.set(i, args.value);
+        nms.set(i, internal::c_str_to_r_str_view(args.name));
+      } else {
+        out.set(i, args);
+      }
+      ++i;
+    }()), ...);
+    out.set_names(nms);
+    return out;
+  }
+}
+template <RVal T, typename... Args>
+r_vec<T> make_vector(Args&&... args) {
+  return make_vec<T>(std::forward<Args>(args)...);
+}
+
+
+namespace attr {
+
+template <RObject T, typename... Args>
+requires requires(T& x) { x.maybe_ensure_exclusive(); }
+void modify_attrs(T& x, Args&&... args) {
+  r_vec<r_sexp> attrs = make_vec<r_sexp>(std::forward<Args>(args)...);
+  x.maybe_ensure_exclusive();
+  auto old = internal::get_core_attrs<T>(x);
+  attr::impl::modify_attrs_impl(x, attrs);
+  internal::restore_core_attrs<T>(x, old);
+}
+
+}
+
+}
+
+#endif

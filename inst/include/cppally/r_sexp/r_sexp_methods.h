@@ -1,0 +1,83 @@
+#ifndef CPPALLY_R_SEXP_METHODS_H
+#define CPPALLY_R_SEXP_METHODS_H
+
+// Type-safe methods for r_sexp
+
+#include <cppally/r_sexp/visit.h>
+#include <cppally/identical.h>
+
+namespace cppally {
+
+namespace internal {
+
+inline bool attrs_identical(const r_sexp& a, const r_sexp& b) {
+    
+    r_vec<r_sexp> a_attrs = attr::get_attrs(a);
+    r_vec<r_sexp> b_attrs = attr::get_attrs(b);
+
+    if (internal::r_addresses_equal(a_attrs, b_attrs)) return true;
+    if (a_attrs.length() != b_attrs.length()) return false;
+    if (!identical_impl(a_attrs.names(), b_attrs.names())) return false;
+
+    r_size_t n = a_attrs.length();
+
+    for (r_size_t i = 0; i < n; ++i){
+        if (!identical_impl(a_attrs.view(i), b_attrs.view(i))){
+            return false;
+        }
+    }
+    return true;
+}
+
+template <RVector T>
+inline bool identical_impl(const T& a, const T& b) {
+    
+    if (internal::r_addresses_equal(a, b)) return true; // same pointer
+    if (a.length() != b.length()) return false;
+
+    bool x_has_attrs = attr::has_attrs(a);
+    bool y_has_attrs = attr::has_attrs(b);
+    if (x_has_attrs != y_has_attrs) return false;
+    if (x_has_attrs && !attrs_identical(static_cast<r_sexp>(a), static_cast<r_sexp>(b))) return false;
+
+    r_size_t n = a.length();
+    for (r_size_t i = 0; i < n; ++i){
+        if (!identical_impl(a.view(i), b.view(i))){
+            return false;
+        }
+    }
+    return true;
+}
+
+template<>
+inline bool identical_impl<r_factors>(const r_factors& a, const r_factors& b) {
+    return identical_impl(a.value, b.value);
+}
+
+template<>
+inline bool identical_impl<r_df>(const r_df& a, const r_df& b) {
+    return identical_impl(a.value, b.value);
+}
+
+inline bool identical_impl(const r_sexp& a, const r_sexp& b) {
+
+    if (internal::r_addresses_equal(a, b)) return true;
+    
+    if (a.is_null() || b.is_null()) return false; // If true it would have been caught by above ptr comparison
+
+    if (CPPALLY_TYPEOF(a) != CPPALLY_TYPEOF(b)) return false;
+
+    return r_sexp_view(a, [&b]<typename vec_t>(const vec_t& veca) -> bool {
+        if constexpr (is<vec_t, r_sexp>){
+            return R_compute_identical(veca, b, 16);
+        } else {
+            return identical_impl(veca, vec_t(b, view_tag{}, no_checks_tag{}));
+        }
+    });
+}
+
+}
+
+} 
+
+#endif

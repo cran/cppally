@@ -1,0 +1,244 @@
+#ifndef CPPALLY_R_STR_H
+#define CPPALLY_R_STR_H
+
+#include <cppally/r_setup.h>
+#include <cppally/r_concepts.h>
+#include <cppally/r_sexp/r_sexp.h>
+#include <cppally/r_sexp/r_sexp_types.h>
+#include <cppally/string/string_literal.h>
+#include <limits>
+#include <string>
+#include <string_view>
+#include <cstdio> // For snprintf
+
+namespace cppally {
+
+namespace internal {
+
+inline constexpr std::size_t str_length(const char* x) noexcept {
+  return std::string_view(x).size();
+}
+
+inline SEXP mk_char_utf8(const char* x, std::size_t n) {
+  if (n > static_cast<std::size_t>(std::numeric_limits<int>::max())) [[unlikely]] {
+    abort("string is too large (>= 2^31 bytes long)");
+  }
+  return Rf_mkCharLenCE(x, static_cast<int>(n), CE_UTF8);
+}
+
+}
+
+// R String - cppally version of CHARSXP
+// r_str must never be converted to `SEXP`/`r_sexp` except where cppally returns `r_str` to R.
+// All templates assume that `SEXP`/`r_sexp` is reserved for objects that can safely fit into an R list vector.
+// Furthermore CHARSXP is a special case because it is essentially the only SEXP that already fits into a non-list vector: a character vector.
+struct r_str {
+  r_sexp value;
+  using value_type = r_sexp;
+  r_str() : value{internal::lazy_str_impl<"">(), internal::view_tag{}} {}
+
+  explicit r_str(r_sexp x) : value(std::move(x)) {
+    internal::check_valid_storage<r_str>(unwrap(value));
+  }
+
+  // Explicit SEXP -> r_str
+  explicit r_str(SEXP x) : r_str(r_sexp(x)){}
+  explicit r_str(SEXP x, internal::view_tag) : r_str(r_sexp(x, internal::view_tag{})) {}
+  explicit r_str(r_sexp x, internal::no_checks_tag) : value(std::move(x)) {}
+  explicit r_str(SEXP x, internal::no_checks_tag) : r_str(r_sexp(x), internal::no_checks_tag{}) {}
+  explicit r_str(SEXP x, internal::view_tag, internal::no_checks_tag) noexcept : value(x, internal::view_tag{}) {}
+
+  explicit r_str(const char *x) : r_str(internal::mk_char_utf8(x, internal::str_length(x)), internal::no_checks_tag{}) {}
+
+  // Implicit r_str -> SEXP 
+  operator SEXP() const noexcept { return value; }
+
+  // Explicit r_str_view -> r_str
+  explicit r_str(r_str_view x);
+
+  const char *c_str() const noexcept {
+    return CHAR(unwrap(*this));
+  }
+
+  std::string_view cpp_str() const noexcept {
+    return std::string_view{c_str(), static_cast<std::size_t>(n_bytes())};
+  }
+
+  // Explicit conversions
+  explicit operator const char*() const noexcept { return c_str(); }
+  explicit operator std::string_view() const noexcept { return cpp_str(); }
+
+  static r_str na() noexcept {
+    return r_str(NA_STRING, internal::view_tag{}, internal::no_checks_tag{});
+  }
+
+  bool is_na() const noexcept {
+    return unwrap(*this) == unwrap(na());
+  }
+
+  bool is_empty() const noexcept {
+    return unwrap(*this) == R_BlankString;
+  }
+
+  int n_bytes() const noexcept {
+    return LENGTH(unwrap(*this));
+  }
+
+  // Is string valid UTF-8? (ASCII is also valid UTF8)
+  bool is_utf8() const noexcept {
+    return static_cast<bool>(Rf_charIsUTF8(unwrap(*this)));
+  }
+
+  bool is_ascii() const noexcept {
+    return static_cast<bool>(Rf_charIsASCII(unwrap(*this)));
+  }
+
+  bool is_latin1() const noexcept {
+    return static_cast<bool>(Rf_charIsLatin1(unwrap(*this)));
+  }
+
+  // Convert to UTF-8. This matches `base::enc2utf8()`.
+  // ASCII and bytes are left as-is.
+  r_str as_utf8() const {
+    if (is_na() || is_ascii()) {
+      return *this;
+    }
+    cetype_t enc = Rf_getCharCE(unwrap(*this));
+    if (enc == CE_UTF8 || enc == CE_BYTES) {
+      return *this;
+    }
+    // Valid UTF-8 but unmarked
+    if (is_utf8()) {
+      return r_str(internal::mk_char_utf8(c_str(), static_cast<std::size_t>(n_bytes())), internal::no_checks_tag{});
+    }
+    // Latin-1 mapping is a (most of the time) fixed, locale-independent byte transform
+    if (is_latin1()) {
+      const unsigned char *p = reinterpret_cast<const unsigned char *>(c_str());
+      const int n = n_bytes();
+      std::string out;
+      // Most Latin-1 text is mostly ASCII, so n is a good guess; grows only if high bytes are dense
+      out.reserve(static_cast<std::size_t>(n));
+      int i = 0;
+      for (; i < n; ++i) {
+        const unsigned char b = p[i];
+        // In Latin-1 the byte value IS the Unicode code point, so 0x00-0x7F is already UTF-8
+        if (b < 0x80) {
+          out.push_back(static_cast<char>(b));
+        } else if (b >= 0xA0) {
+          // 0xA0-0xFF: ISO-8859-1 and Windows CP1252 agree, byte == code point.
+          // 2-byte UTF-8: 110xxxxx 10xxxxxx (never wider, since max code point is 0xFF)
+          out.push_back(static_cast<char>(0xC0 | (b >> 6)));
+          out.push_back(static_cast<char>(0x80 | (b & 0x3F)));
+        } else {
+          // 0x80-0x9F: ISO-8859-1 (C1 controls) and CP1252 (€, smart quotes, dashes...) diverge,
+          // and R may interpret CE_LATIN1 as CP1252 (notably Windows). Defer to R below.
+          break;
+        }
+      }
+      if (i == n) {
+        return r_str(internal::mk_char_utf8(out.data(), out.size()), internal::no_checks_tag{});
+      }
+    }
+    // translateCharUTF8 allocates with R_alloc so release it once mkChar has copied the bytes
+    const void *vmax = vmaxget();
+    r_str res(safe[Rf_translateCharUTF8](unwrap(*this)));
+    vmaxset(vmax);
+    return res;
+  }
+
+};
+
+inline r_str r_sexp::address() const {
+  char buf[32];
+  std::snprintf(buf, 32, "%p", static_cast<void*>(value));
+  return r_str(buf);
+}
+
+// Unsafe (but fast) r_str type
+// Similar to std::string_view, it is a view of an r_str/CHARSXP whose lifetime must be shorter than the object it's viewing
+struct r_str_view {
+  SEXP value; 
+  using value_type = SEXP;
+
+  // Constructors
+  r_str_view() : value{static_cast<SEXP>(internal::lazy_str_impl<"">())} {}
+  explicit r_str_view(SEXP x) : value{x} {
+    internal::check_valid_storage<r_str_view>(value);
+  }
+  explicit r_str_view(SEXP x, internal::view_tag) : r_str_view(x) {}
+  explicit r_str_view(SEXP x, internal::no_checks_tag) noexcept : value{x} {}
+  explicit r_str_view(SEXP x, internal::view_tag, internal::no_checks_tag) noexcept : r_str_view(x, internal::no_checks_tag{}) {}
+  // Can't construct `r_str_view` from `const char*` — use `r_str` instead
+  explicit r_str_view(const char *x) = delete;
+  explicit r_str_view(std::string_view x) = delete;
+  // Implicit r_str_view -> SEXP
+  operator SEXP() const noexcept { return value; }
+  
+  // Implicit r_str -> r_str_view
+  r_str_view(const r_str& x) noexcept : value(static_cast<SEXP>(x)) {}
+  
+  const char* c_str() const noexcept { return CHAR(value); }
+  std::string_view cpp_str() const noexcept { return std::string_view{c_str(), static_cast<std::size_t>(n_bytes())}; }
+
+
+  // Explicit conversions
+  explicit operator const char*() const noexcept { return c_str(); }
+  explicit operator std::string_view() const noexcept { return cpp_str(); }
+
+  static r_str_view na() noexcept {
+    return r_str_view(NA_STRING, internal::no_checks_tag{});
+  }
+
+  bool is_na() const noexcept {
+    return unwrap(*this) == unwrap(na());
+  }
+
+  bool is_empty() const noexcept {
+    return unwrap(*this) == R_BlankString;
+  }
+
+  int n_bytes() const noexcept {
+    return LENGTH(unwrap(*this));
+  }
+
+  // Is string valid UTF-8? (ASCII is also valid UTF8)
+  bool is_utf8() const noexcept {
+    return static_cast<bool>(Rf_charIsUTF8(unwrap(*this)));
+  }
+
+  bool is_ascii() const noexcept {
+    return static_cast<bool>(Rf_charIsASCII(unwrap(*this)));
+  }
+
+  bool is_latin1() const noexcept {
+    return static_cast<bool>(Rf_charIsLatin1(unwrap(*this)));
+  }
+
+};
+
+inline r_str::r_str(r_str_view x) : value(static_cast<SEXP>(x)) {}
+
+template <string_literal T>
+inline r_str cached_str() {
+    return r_str(internal::lazy_str_impl<T>(), internal::no_checks_tag{});
+}
+
+// Memory address
+inline r_str address(SEXP x) {
+    return r_sexp(x, internal::view_tag{}).address();
+}
+
+namespace internal {
+
+// Result is UNPROTECTED! Ensure the result is immediately protected
+// e.g. by setting it as an element to r_vec<r_str_view>
+// Otherwise just use `r_str()` or `as<r_str>` 
+inline r_str_view c_str_to_r_str_view(const char* x){
+  return r_str_view(mk_char_utf8(x, str_length(x)), internal::no_checks_tag{});
+}
+
+}
+
+}
+
+#endif

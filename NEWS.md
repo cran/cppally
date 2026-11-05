@@ -1,3 +1,474 @@
+# cppally 1.2.0 (2026-11-05)
+
+## Breaking changes
+
+- `r_size_t` is now always `int64_t` on 64-bit platforms and so does not 
+always align with R's `R_xlen_t`.
+
+- `r_sexp::length` has been fully deprecated and removed. 
+Use `cppally::length` for returning object length.
+
+- Sequences no longer abort on overflow, but instead silently return `NA`.
+
+- Removed `r_vec::subset` and `r_factors::subset` as they didn't thematically 
+fit in with the rest of the members. 
+The free `subset` function is still available.
+
+- Renamed `common_length` to `list_common_length`. `common_length` now accepts
+variadic inputs.
+
+- Relocated various headers to and from the sugar folder. 
+
+- `r_factors` member functions `get_codes`, `set_codes`, and `new_codes` 
+have been removed. The functionality of these can be achieved with the existing
+members.
+
+- `as<r_str>(r_dbl::inf())` now returns title case `r_str("Inf")` instead 
+of lower case `r_str("inf")`. Similarly `as<r_str>( -r_dbl::inf() )` returns
+`r_str("-Inf")`.
+
+- C++ char types (except `const char*` and `unsigned char`) 
+no longer satisfy `CastableToRScalar` and therefore 
+cannot participate in R/C++ function registration.
+
+- Many `r_sexp`-based free functions have been removed and there are a 
+few reasons for doing so. The first being that cppally didn't provide a complete 
+set of `r_sexp` free functions anyway, and so providing an incomplete set felt
+lackluster. Another reason is that removing these methods speeds up compilation 
+and makes the API more lightweight and predictable. Users are now encouraged 
+to write their own `r_sexp` methods as and when they require them.
+
+- `r_sym::value_type` is now correctly `SEXP` and not `r_sexp`.
+
+- The `preserve_ties` argument of `order()` is deprecated and ignored. 
+Stable-sorting is now always used.
+
+- Default arguments are now explicitly rejected (before they were quietly ignored).
+Default arguments will almost certainly be supported in the next release.
+
+## Bug fixes
+
+- Fixed a bug where matching on integer vectors with a non `NA` `nomatch` value
+would still return `NA`.
+
+- Fixed a bug where getting `r_df` rows would return CHARSXP instead of STRSXP.
+
+- Fixed a bug where `r_vec::apply` would throw a compiler error when called on 
+lists and character vectors.
+
+- Fixed a bug where the wrong OMP pragma was being used for 
+non-SIMD parallel for loops.
+
+- Fixed a bug where calling `set_attr()` on `r_df` or `r_factors` 
+would produce a compiler error.
+
+- Fixed a rare bug where copying `r_str` elements with `r_copy_n()` would 
+let `CHARSXP` objects be prematurely garbage-collected.
+
+- Setting attributes (using cppally) now preserves immutable attributes. 
+This includes the `"Date"` class for `r_vector<r_date>`, the `"integer64"` class 
+for `r_vector<r_int64>`, and the `c("POSIXct", "POSIXt")` 
+class for `r_vector<r_psxct>`. `r_factors` now always keeps its levels as well.
+
+## r_function
+
+- New class `r_function` to safely call R functions from C++. 
+
+- New helper `pkg_env` to return the environment of a package, allowing users
+to easily retrieve functions from specific packages,
+e.g. `r_function("foo", pkg_env<"bar">())`.
+
+## std::optional arguments
+
+- Registering functions with optional arguments is now fully supported with 
+`std::optional<T>`.
+
+- R's `NULL` when passed to C++ becomes `std::nullopt`, and vice versa: 
+`std::nullopt` when passed to R becomes `NULL`.
+
+- Previously only `r_vector<T>` supported optional arguments via `NULL`, 
+but optional scalars are now supported, e.g. `std::optional<r_dbl>`.
+
+- `std::optional` arguments default to `NULL` in the registered R function and 
+so don't need to be specified.
+
+C++ function with optional arg:
+
+```cpp
+[[cppally::register]]
+r_dbl foo(r_dbl x, std::optional<r_dbl> y){
+  if (y.has_value()){
+    return x + y.value();
+  } else {
+    return x;
+  }
+}
+```
+
+This becomes the registered R function:
+
+```r
+foo <- function(x, y = NULL) {
+  .Call(`_package_foo`, x, y)
+}
+```
+
+So both these are valid calls:
+
+```r
+foo(100)
+foo(100, 200)
+```
+
+## random_stream
+
+- A new class `random_stream`, allowing one to use C++ random number generators, 
+while preserving reproducibility from R's seed. This means that 
+numbers drawn from `random_stream` are reproducible via `set.seed()`.
+
+- `random_stream` is driven by xoshiro256++ (Blackman & Vigna) via the bundled 
+Xoshiro-cpp library (Ryo Suzuki, MIT), rather than a `<random>` engine. 
+It still models `std::uniform_random_bit_generator`, so it can 
+be handed to `<random>` distributions and algorithms such as `std::shuffle`.
+
+- Default-constructing a `random_stream` seeds it from R's RNG (via two 
+`unif_rand()` draws), so `set.seed()` still determines every draw, while 
+R's RNG state is only touched once per stream rather than once per draw.
+
+- `random_stream` can also be constructed directly from a custom `uint64_t` seed,
+allowing the generation of random numbers without affecting R's RNG state. 
+This can be useful if you do not need reproducibility from R's `set.seed()`.
+
+- `random_stream::split()` returns an independent child stream. 
+Parallel code should build its streams up front via `split()` 
+before dispatching work.
+
+- `random_stream::index` samples random indices in [a, b], allowing for 
+fast sampling with replacement. It uses Lemire's divisionless method 
+(source: arXiv:1805.10941) along with a portable 128-bit multiply, provided by
+the ankerl library. This makes it fast and platform-agnostic, therefore results 
+should be reproducible across platforms.
+
+- `random_stream` also offers most of the same distributional
+random number generators that 'stats' offers, including `uniform()`, 
+`normal()`, `exponential()`, and many more. While these will not produce 
+identical numbers to 'stats' equivalents, their distributional properties 
+are the same.
+
+- `draw_from_r` must be used if one wishes to call scalar RNG functions from the 
+R C API header 'Random.h'.
+
+## r_date & r_psxct
+
+A new complete set of fast and parallelisable thread-safe member and free functions for 
+`r_date` and `r_psxct`, which respectively represent R dates and date-times. 
+Currently, all `r_date` and `r_psxct` member functions are thread-safe except for 
+`r_date::date_str()` and `r_psxct::datetime_str()`.
+
+- New field accessors like
+`year()`, `month()`, `week()`, `day()`, `hour()`, `minute()`, `second()`, 
+`iso_week()` and `iso_year()`. 
+
+- New date arithmetic member template function `add<>`, allowing flexible addition with
+time units such as "years", "months", "weeks", "days", "hours", "minutes", and "seconds".
+
+- New date rounding member functions `floor`, `ceiling` and `round`. 
+
+- New static member functions `r_date::today()` and `r_psxct::now()` to 
+get the current date or current time. `r_psxct::now()` returns the current time 
+in fractional seconds to microsecond precision.
+
+- New template function `time_diff<>` to calculate time differences between 
+two dates or date-times.
+
+### Date and date-time arithmetic
+
+To perform time arithmetic with dates and date-times, use `add<>`, e.g. 
+`x.add<"days">(1)` adds 1 day to x, and `x.add<"months">(-3)` subtracts 3 months 
+from x.
+
+The `on_impossible_date` argument of `add<>` allows you to control how to handle 
+impossible dates that arise when performing month-based arithmetic, 
+e.g. 31 Jan + 1 month = ?
+
+All `roll` options:
+
+```cpp
+enum roll : uint8_t {
+    none = 0,       // does not roll and impossible dates are returned as NA
+    backward = 1,   // rolls backwards until the last day of the current month is reached
+    forward = 2,    // rolls to first day of next month
+    away = 3,       // rolls forward when adding and backward when subtracting
+    nearest = 4     // rolls backward when adding and forward when subtracting
+};
+```
+
+Sub-day units are accepted in both `r_date` and `r_psxct` arithmetic. 
+For `r_date` specifically, fractional dates are produced when using sub-day units
+(such as "hours") for date arithmetic. `r_date::today().add<"hours">(12)` will 
+produce a fractional date representing noon of the current day and 
+`r_date::today().as_datetime().add<"hours">(12)` will produce a date-time `r_psxct` 
+also representing noon of the current day.
+
+I would generally recommend against using sub-day units with `r_date` and to use 
+`r_psxct` if you ever need sub-day granularity.
+
+To add sub-second units such as milliseconds and microseconds, simply supply 
+fractional seconds, e.g. `x.add<"seconds">(1.0/1000.0)` adds 1 millisecond to x.
+It's worth noting that loss in floating-point precision can occur when working 
+with small microseconds, though this is inherent in R's `POSIXct` class as well.
+
+### Date and date-time rounding
+
+To round dates and date-times, use member functions `floor`, `ceiling` and `round`. 
+
+For example, `x.floor<"months">()` floors x to the start of the current month. 
+`x.ceiling<"months">()` advances x to the start of the next month, 
+unless it is already at the start of the month.
+
+Rounding functions accept a `week_start` argument, which is only relevant for 
+rounding "weeks". It follows the same convention as `wday()`, 
+where 1 is Monday and 7 is Sunday (the default). 
+For example, `x.floor<"weeks">()` floors x to the most recent past Sunday,
+whereas `x.floor<"weeks">(1)` floors x to the most recent past Monday.
+
+When the date is exactly at the midpoint between boundaries, `round()` will 
+floor the date, so for example if we are rounding a date-time to the nearest day and 
+the time is at noon, the date-time gets floored to midnight on the same day.
+
+### Date and date-time differences
+
+To calculate the time difference between two dates or date-times, use
+`time_diff<>`.
+
+For example, `time_diff<"months">(x, y)` calculates the difference in 
+months between x and y. If x and y do not share the same day-of-the-month, then 
+a fractional difference is returned. Use `cppally::floor()` to floor the result 
+if you always need a whole difference.
+
+To return time differences using `n` time unit periods (the default is 1), just 
+pass it to the `n` argument, e.g. `time_diff<"months">(x, y, /*n=*/ 3)` returns 
+the difference in quarters between x and y, and similarly 
+`time_diff<"days">(x, y, /*n=*/ 7)` is the same as `time_diff<"weeks">(x, y)`.
+
+For monthly time differences, sometimes impossible dates can arise when either x or y 
+has a day-of-the-month that is larger than the other's number of days in the month. 
+While the default `time_diff<"months">()` would return `NA`, we can control the internal 
+impossible date rolling with the `on_impossible_date` arg. 
+
+For example, assuming x is 31 Jan 2024 and y is 29 Feb 2024, 
+`time_diff<"months">(x, y, 1, roll::nearest)` rolls the impossible 31 Feb date 
+back to 29th February, resulting in a difference of exactly 1 month.
+If we specified `roll::away` the date becomes 1st March instead, 
+giving a fractional answer that is slightly less than 1 month. 
+
+## Resizable vectors
+
+cppally now supports resizable vectors for R versions >= 4.6.0.
+
+The R C API itself is still **experimental**, so the cppally API may evolve with it.
+
+To check whether resizable vectors are available, use this flag:
+
+```cpp
+#ifdef CPPALLY_HAS_RESIZABLE_VECTORS
+  // Do something with resizable vectors
+#else
+  // Do something with fixed vectors
+#endif
+```
+
+To create a resizable vector, allocate an empty vector and set capacity with `reserve()`.
+
+```cpp
+r_vector<r_int> int_vec;
+int_vec.reserve(100); // length = 0, capacity = 100
+```
+
+You can then resize the vector with `set_length()`.
+
+```cpp
+int_vec.set_length(50); // length = 50, capacity = 100
+```
+
+Alternatively you can create a resizable vector upfront with the `resizable{}` tag.
+
+```cpp
+r_vector<r_int> int_vec(50, resizable{}, /*capacity=*/ 100); // length = 50, capacity = 100
+```
+
+Useful members for resizable vectors:
+
+- `capacity()` - Total capacity which is always >= length.
+- `reserve()` - Reserve a capacity larger than current capacity (it never shrinks capacity).
+- `set_capacity()` - Like `reserve()` but the capacity is allowed to shrink.
+- `set_length()` - Resize vector in-place, reallocating if new length exceeds capacity.
+- `push_back()` - Append value. Capacity automatically grows (2x) when full.
+- `pop_back()` - Remove last value. Abort if vector is empty.
+- `clear()` - Remove all elements while preserving capacity.
+- `shrink_to_fit()` - Shrink capacity to match length.
+- `append()` - Append vector, increasing capacity if necessary.
+- `is_empty()` - Is vector empty (length == 0)?
+- `front()` - First value of vector. Abort if vector is empty.
+- `back()` - Last value of vector. Abort if vector is empty.
+
+**Important:** Members that change the length or capacity 
+will automatically convert regular fixed vectors into resizable vectors.
+
+A note on `r_vector::resize()`:
+
+Unlike `std::vector::resize()`, `resize()` does not modify the vector. 
+It is an older member that always allocates a fresh vector. To resize in-place, 
+use `set_length()`. If the vector is shared elsewhere, `set_length()` copies it
+first (regardless of `CPPALLY_COPY_ON_MODIFY`), so other references are never affected.
+
+## Improvements
+
+- `cpp_source` now generates OpenMP flags by default, so its compiled functions 
+can use both OpenMP SIMD vectorisation and multi-threaded execution 
+(threads set via `set_threads()`).
+
+- `cpp_source` gains the `openmp` argument.
+
+- Integer multiplication overflow handling is now more portable.
+
+- `r_sym` now constructs symbols from strings (`const char*`, `r_str`,
+`r_str_view`) under unwind protection, so R errors can no longer 
+longjmp past C++ destructors.
+
+- `r_lgl` construction from integers other than `int` is now a SFINAE 
+error instead of an ambiguous constructor error.
+
+- Speed improvements to logical operators of `r_lgl`.
+
+- User-supplied `[[cppally::init]]` routines are now placed around 
+try/catch blocks to catch C++ exceptions 
+(or R errors which `cppally::abort()` converts into C++ exceptions).
+
+- Sorting speed has been improved for both character vectors 
+and numeric vectors. Sorting is faster for character vectors when there are 
+a relatively high proportion of unique strings. Sorting is also 
+dramatically faster for double vectors when all values in the vector are 
+exact whole numbers.
+
+- `groups` class members `starts()`, `counts()` now 
+see substantial speed improvements when data are in group-sorted order.
+When sorted, `starts()` and `counts()` may perform a 
+hybrid linear/exponential (or galloping) search. This new search strategy
+dramatically improves performance on large data with small numbers of groups.
+Time complexity now scales with the number of groups and not the size of data.
+
+- `groups::order()` also sees speed improvements for unsorted data, 
+due to the fact that it unconditionally applies a counting sort, 
+without checking for `NA` values (since group IDs do not have `NA` values) or 
+scanning the group IDs for their range, like `cppally::order()` generally 
+(and correctly) does for other integer vectors. When data are already sorted 
+it simply returns the sequence [0, n - 1] for n data points (as it did before).
+
+- `n_unique` has been sped-up for integer vectors.
+
+- Some algorithms now benefit from a cardinality estimate. 
+For large inputs, an extended Chao estimator (doi:10.1016/j.csda.2011.01.017) 
+is applied to a random sample of the data to choose a better 
+initial reserve size for the hash maps involved. 
+This improves performance on high-cardinality data, 
+where it avoids repeatedly resizing the map as new keys are added.
+
+- Algorithms that utilise hashing should now see speed improvements for strings 
+in particular, as SEXP type checking is now skipped for hashing specifically.
+
+- `use_cppally()` now includes the "$(CXX_VISIBILITY)" Makevars flag, making dll
+symbol visibility hidden by default. 
+This should have no effect on code written with cppally, though it may slightly 
+improve compilation time. R/C++ registered functions are now registered with the 
+R C API tag `attribute_hidden`. 
+
+- Auto-generated C++ code for R function registration now uses a 
+tidier naming convention for generated lambda arguments in 
+registered template functions. 
+Previously "_internal" was appended to each arg. Now "_sexp" is appended, reducing
+visual bloat and conveying a more accurate meaning. This should have no backwards
+compatibility consequences as it simply renames the auto-generated lambda 
+argument names on re-registration.
+
+## Other new features
+
+- New highly efficient stats function `cppally::quantile()`, 
+a C++ implementation of R's `stats:::quantile.default`.
+
+- `r_vec<>` gains two new `initializer_list` constructors, one for
+constructing unnamed vectors, and another for constructing named vectors.
+
+- New function `scalar_coerce`. Use this with 
+`allow_lossy = true` if you want to return `NA` instead of an error on 
+a completely lossy scalar coercion. For example, 
+converting a letter string to a double (e.g. `as<r_dbl>(r_str("a"))`) 
+always results in an error by default whereas 
+`scalar_coerce<r_dbl>(r_str("a"), /*allow_lossy=*/ true)` returns `na<r_dbl>()`.
+
+- New `copy` member for `r_vec`, `r_factors` and `r_df`. `copy` shallow 
+copies the vector by creating a fresh copy of the atomic data, without deep 
+copying lists or attributes, just like `Rf_shallow_duplicate`.
+
+- New member `r_vec::materialise()`, a safe route to always materialise 
+a (possibly ALTREP) vector if it hasn't already been materialised.
+
+- New member `r_vec::is_materialised()` to replace `materialised()`, which has been 
+soft-deprecated.
+
+- New template `make_vector`, an alias of `make_vec`.
+
+- New by-group left-fold functional `reduce_by_group`, allowing for very 
+efficient binary reductions by-group.
+
+- New `r_sexp` visit helpers `visit_as` and `view_as`.
+
+- New `r_str` member function `is_utf8` to check whether a string has valid
+UTF-8 encoding, which includes ASCII strings.
+
+- New `r_str` member function `as_utf8` to convert a string to a UTF-8 string. 
+If the string is already a UTF-8 string, it is a no-op and simply returns the 
+same `r_str`.
+
+- `r_str` and `r_str_view` gain new member `n_bytes`, which 
+returns the length of the string in bytes.
+
+- `r_str` and `r_str_view` gain new member `is_ascii`, which 
+checks if the string is valid ASCII.
+
+- `r_sym` gains new static member `missing_symbol`, which returns R's 
+symbol for a missing argument.
+
+- New class `string_literal` to facilitate compile-time string literal NTTP 
+programming.
+
+- New relational operators between `r_str_view` and `std::string_view`, allowing
+for comparing cppally strings to string literals, like: `r_str("A") == "A"`. 
+`NA` strings return `NA`: `r_str::na() == "A"`.
+
+- R function `cpp_eval` gains a new argument, `cppally_header`, allowing one to 
+compile expressions using the optional light header "cppally_light.hpp".
+
+- `r_factors` gains a new member function, `refactor`, which creates a new
+`r_factors` object given a new set of levels.
+
+- New function `list_recycle` to recycle vectors of a list.
+
+- New R function `use_openmp()` to set OpenMP-enabling Makevars flags.
+
+- A new **optional** feature where users can now restrict the set of candidates 
+that participate in template dispatch for template-registered R/C++ functions 
+via `use_template_dispatch_candidates()`. 
+For example, if a user wishes to write a C++ algebra library using only integers and doubles,
+they can call `use_template_dispatch_candidates(c("r_int", "r_dbl"))`, and 
+any template they register to R will only ever accept **at most** those types, regardless of 
+the concepts and constraints of the template.
+This can dramatically reduce compilation times for template-heavy code when 
+specifying a small number of candidates. Generally the same effect can be 
+achieved with concepts and constraints, but this acts as an additional layer 
+to ensure faster compile-times in scenarios where it makes sense to use a small 
+candidate set.
+
 # cppally 1.1.0 (2026-07-12)
 
 ## Breaking changes

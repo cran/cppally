@@ -1,0 +1,190 @@
+#ifndef CPPALLY_R_DENSE_INT_MAP_H
+#define CPPALLY_R_DENSE_INT_MAP_H
+
+#include <cppally/vector/r_vector.h>
+#include <cppally/stats/range.h>
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+#include <utility>
+#include <vector>
+
+namespace cppally {
+
+namespace internal {
+
+// Single source of truth for when a dense int table beats a hash map:
+// the table must be small in absolute terms (memory) and relative to n (build time).
+inline constexpr uint64_t max_table_bytes = 1280000000;
+inline constexpr uint64_t min_table_bytes = 262144;
+inline constexpr uint64_t table_bytes_per_row = 64;
+
+inline bool table_fits_budget(uint64_t table_bytes, uint64_t n) {
+    return table_bytes <= std::min(max_table_bytes, std::max(min_table_bytes, n * table_bytes_per_row));
+}
+
+template <std::integral Val>
+bool use_int_table(uint64_t range_span, r_size_t n) {
+
+    if (range_span > ( max_table_bytes / sizeof(Val) )) {
+        return false;
+    }
+
+    return table_fits_budget(range_span * sizeof(Val), n);
+}
+
+// Presence tables store a bit per slot, so they earn ~32-64x more span than a value table for the
+// same budget - the shift can't overflow so it needs no pre-filter
+// inline bool use_int_set(uint64_t range_span, r_size_t n) {
+//     return table_fits_budget(range_span >> 3, n);
+// }
+
+// The 'try the integer optimisation first' entry point.
+// Runs body(try_emplace, find_or) against a dense int table and returns true,
+// or returns false WITHOUT calling body when the keys don't suit a table
+// (all-NA, or too wide a range) - the caller then runs its own fallback.
+// Results should escape through body's captures, not its return value.
+//
+//   try_emplace(key, v) -> std::pair<Val, bool>
+//       Inserts v under key if absent. Returns the value now stored under key,
+//       and whether this call inserted it. Only call with values of `keys`.
+//   find_or(key, not_found) -> Val
+//       The value stored under key, or `not_found` if absent. Any key is fine.
+//
+// `Key` and `Val` are independent widths. `Key` is fixed by the data being indexed and is what
+// NA detection runs on; `Val` is chosen by the caller and covers everything on the value side -
+// what gets stored, the `empty_value` sentinel, and `find_or`'s `not_found`. Callers wanting
+// 64-bit values over 32-bit keys (e.g. `match<r_int64>` on an int haystack) specify `Val` explicitly.
+//
+// NA is an ordinary key (it gets the table's last slot).
+// The table needs one value to mark unoccupied slots, so `empty_value` must be a value the
+// caller never stores (-1 when storing 0-indexed positions/ids, 0 when storing presence flags).
+// Note `not_found` may legitimately be NA - it is returned, never stored, so it does not
+// collide with `empty_value`
+
+// Builds the table over [min_val, max_val] and runs body. Both bounds must be
+// non-NA and the span already vetted as worth a table
+template <std::integral Val, std::integral Key, typename F>
+bool run_dense_int_map(Key min_val, Key max_val, Val empty_value, F&& body) {
+
+    uint64_t range_span = static_cast<uint64_t>(max_val) - static_cast<uint64_t>(min_val);
+
+    // Table maps (key - min_val) -> Val, NA keys get the extra last slot
+    size_t na_idx = static_cast<size_t>(range_span) + 1;
+    std::vector<Val> table(na_idx + 1, empty_value);
+    Val* RESTRICT p_table = table.data();
+
+    // NA is selected before `key - min_val` is evaluated, which would overflow for NA
+    auto try_emplace = [p_table, min_val, na_idx, empty_value](Key key, Val v) -> std::pair<Val, bool> {
+        Val& slot = p_table[is_na(key) ? na_idx : static_cast<size_t>(key - min_val)];
+        if (slot == empty_value) {
+            slot = v;
+            return {v, true};
+        }
+        return {slot, false};
+    };
+
+    auto find_or = [p_table, min_val, max_val, na_idx, empty_value](Key key, Val not_found) -> Val {
+        if (!is_na(key) && (key < min_val || key > max_val)) {
+            return not_found;
+        }
+        Val slot = p_table[is_na(key) ? na_idx : static_cast<size_t>(key - min_val)];
+        return slot == empty_value ? not_found : slot;
+    };
+
+    body(try_emplace, find_or);
+    return true;
+}
+
+// No table for these keys, the caller runs its own fallback
+// `Val` leads so that an explicit `try_dense_int_map<Val>(...)` binds the value width, not the key vector
+template <std::integral Val, typename T, typename F>
+bool try_dense_int_map(const T&, Val, F&&) {
+    return false;
+}
+
+template <std::integral Val, RIntegerNumber T, typename F>
+bool try_dense_int_map(const r_vec<T>& keys, Val empty_value, F&& body) {
+
+    r_size_t n = keys.length();
+
+    r_vec<T> rng = range(keys, /*na_rm=*/true);
+
+    auto min_val = unwrap(rng.get(0));
+    auto max_val = unwrap(rng.get(1));
+
+    // If keys had only NAs, result would also be c(NA, NA)
+    bool all_nas = is_na(min_val) && is_na(max_val);
+    uint64_t range_span = all_nas ? 0 : static_cast<uint64_t>(max_val) - static_cast<uint64_t>(min_val);
+
+    if (all_nas || !use_int_table<Val>(range_span, n)) {
+        return false;
+    }
+
+    return run_dense_int_map<Val>(min_val, max_val, empty_value, std::forward<F>(body));
+}
+
+template <std::integral Val, typename F>
+bool try_dense_int_map(const r_vec<r_lgl>&, Val empty_value, F&& body) {
+    return run_dense_int_map<Val>(0, 1, empty_value, std::forward<F>(body));
+}
+
+template <std::integral Val, typename F, typename key_t>
+requires (any<key_t, r_dbl, r_date, r_psxct>)
+bool try_dense_int_map(const r_vec<key_t>& keys, Val empty_value, F&& body) {
+
+    r_size_t n = keys.length();
+
+    if (n == 0){
+        return false;
+    }
+
+    int lo = std::numeric_limits<int>::max();
+    int hi = std::numeric_limits<int>::min();
+
+    // Check if all keys are finite and in (-2^31, 2^31)
+
+    for (r_size_t i = 0; i < n; ++i){
+        
+        double key = static_cast<double>(keys.get(i));
+
+        // This will return false for NA, fractional numbers and Inf/-Inf
+        if (!numeric_cast_is_lossless<int>(key)){
+            return false;
+        }
+
+        int int_key = static_cast<int>(key);
+
+        lo = std::min(lo, int_key);
+        hi = std::max(hi, int_key);
+    }
+
+    // reject -2^31 as while it's a valid int in C/C++, it is reserved for NA_INTEGER
+    if (r_int(lo).is_na()){
+        return false;
+    }
+
+    uint64_t range_span = static_cast<uint64_t>(hi) - static_cast<uint64_t>(lo);
+
+    if (!use_int_table<Val>(range_span, n)){
+        return false;
+    }
+
+    return run_dense_int_map<Val>(lo, hi, empty_value,
+        [&body](auto&& try_emplace, auto&& find_or) {
+            body(
+                [&try_emplace](double key, Val v) {
+                    return try_emplace(static_cast<int>(key), v);
+                },
+                [&find_or](double key, Val not_found) {
+                    return numeric_cast_is_lossless<int>(key) ? find_or(static_cast<int>(key), not_found) : not_found;
+                }
+            );
+        });
+}
+
+}
+
+}
+
+#endif

@@ -6,7 +6,7 @@
 \title{Compile C++20 code}
 \usage{
 cpp_source(
-  file,
+  file = NULL,
   code = NULL,
   env = parent.frame(),
   clean = TRUE,
@@ -16,8 +16,10 @@ cpp_source(
   check_factors = FALSE,
   check_data_frames = FALSE,
   copy_on_modify = FALSE,
+  openmp = TRUE,
   cxx_std = Sys.getenv("CXX_STD", "CXX20"),
-  dir = tempfile()
+  dir = tempfile(),
+  ...
 )
 
 cpp_eval(
@@ -30,8 +32,11 @@ cpp_eval(
   check_factors = FALSE,
   check_data_frames = FALSE,
   copy_on_modify = FALSE,
+  openmp = TRUE,
   simplify = TRUE,
-  cxx_std = Sys.getenv("CXX_STD", "CXX20")
+  cxx_std = Sys.getenv("CXX_STD", "CXX20"),
+  cppally_header = c("cppally.hpp", "cppally_light.hpp"),
+  ...
 )
 }
 \arguments{
@@ -45,7 +50,8 @@ For \code{cpp_eval} - This can be a character vector of single-line expressions.
 
 \item{env}{Environment where R functions should be defined.}
 
-\item{clean}{Should files be cleaned up after sourcing? Default is \code{TRUE}.}
+\item{clean}{Should files be cleaned up after sourcing? Default is \code{TRUE}.
+Only newly created directories are removed, existing ones are left as-is.}
 
 \item{quiet}{Should compiler output be suppressed? Default is \code{TRUE}.}
 
@@ -66,14 +72,23 @@ the chance of R crashing when passing factors with invalid levels.}
 \item{copy_on_modify}{Should copy-on-modify be used everywhere? Default is
 \code{FALSE}.}
 
+\item{openmp}{Should code be compiled with OpenMP flags? Default is \code{TRUE}.}
+
 \item{cxx_std}{C++ standard to use. Should be >= C++20.}
 
 \item{dir}{Directory to store the source files.
 The default is a temporary directory via \code{tempfile()} which is removed when
 \code{clean = TRUE}.}
 
+\item{...}{Further arguments passed to \code{use_template_dispatch_candidates()}.}
+
 \item{simplify}{Applies to \code{cpp_eval}. A list of results is returned unless
 \code{length(code) == 1} and \code{simplify = TRUE}.}
+
+\item{cppally_header}{Which header should be
+included with the registered C++ code? The default is the full library
+"cppally.hpp". Choose "cppally_light.hpp" for the lighter header, which may
+provide quicker compile times, at the cost of less features.}
 }
 \value{
 \code{cpp_source()} invisibly compiles the C++ code and registers
@@ -91,13 +106,19 @@ This may include multiple C++ functions.
 \code{cpp_eval()} evaluates a single C++ expression and returns the result.
 For example \code{cpp_eval('get_threads()')} will run the C++ function
 \code{cppally::get_threads()} and return the number of OMP threads currently set
-for use. For expressions no return result, the call is evaluated and returns
-\code{NULL} invisibly.
+for use. For expressions that do not return a result, the call is
+evaluated and \code{NULL} is returned invisibly.
 }
 \examples{
 
 library(cppally)
 library(bit64)
+
+cpp_eval <- function(...){
+  # We don't need the full cppally header for these examples
+  cppally::cpp_eval(..., cppally_header = "cppally_light.hpp")
+}
+
 \donttest{
 cpp_eval('print("hello world!")')
 
@@ -126,14 +147,14 @@ cpp_source(code = '
 add(1, 2)
 add(2, NA)
 
-### ALTREP ###
+### ALTREP
 
 # cppally also supports lazy ALTREP materialisation as an opt-in feature.
 # To opt-in, set `preserve_altrep = TRUE`
 
 cpp_source(
   code = '
-  #include <cppally.hpp>
+  #include <cppally_light.hpp>
   using namespace cppally;
 
   [[cppally::register]]
@@ -151,7 +172,7 @@ cpp_source(
 
 cpp_source(
   code = '
-  #include <cppally.hpp>
+  #include <cppally_light.hpp>
   using namespace cppally;
 
   [[cppally::register]]
@@ -172,7 +193,7 @@ library(bench)
 mark(last_altrep_aware(1:10^5)) # No materialisation
 mark(last_altrep_unaware(1:10^5)) # Materialises full vector
 
-### Copy-on-modify ###
+### Copy-on-modify
 
 # cppally supports copy-on-modify as an opt-in feature
 # It is disabled by default because it incurs a major performance penalty
@@ -183,7 +204,7 @@ mark(last_altrep_unaware(1:10^5)) # Materialises full vector
 
 cpp_source(
   code = '
-  #include <cppally.hpp>
+  #include <cppally_light.hpp>
   using namespace cppally;
 
   [[cppally::register]]
@@ -205,12 +226,12 @@ mark(reverse(x)) # Memory allocated, therefore x was copied before reversing
 # existing vector
 cpp_source(
   code = '
-  #include <cppally.hpp>
+  #include <cppally_light.hpp>
   using namespace cppally;
 
   [[cppally::register]]
   r_vec<r_int> cppally_reverse(r_vec<r_int> x){
-    r_vec<r_int> out = shallow_copy(x);
+    r_vec<r_int> out = x.copy();
     out.rev();
     return out;
   }
@@ -222,9 +243,76 @@ mark(
   cppally_copy_on_modify_reverse = reverse(x),
   cppally_no_copy_on_modify_reverse = cppally_reverse(x)
 )
+
+### Speeding up template-heavy compilation
+
+# When writing C++ code that only ever uses a small subset of cppally types,
+# we can restrict cppally template dispatch to only ever consider these types,
+# potentially speeding up compilation times. Only do this if you are certain
+# that these are the only viable types your code will ever reasonably accept.
+# If you are unsure, then do not use this feature and instead use
+# C++ concepts and template constraints.
+
+# Example: restrict template dispatch on `r_int` and `r_dbl`
+# `cppally::unique()` is templated on RComposite, which accepts all R vectors,
+# factors, and data frames. Therefore writing our own template which depends
+# on `unique()` being available for any generic type, might get expensive if say we
+# are only interested in integers and doubles.
+
+mark(
+
+  unrestricted = cpp_source(
+    code = '
+    #include <cppally.hpp>
+    using namespace cppally;
+
+    template <RVector T>
+    requires (requires (T obj){ unique(obj); })
+    [[cppally::register]]
+    T sorted_unique(T x){
+      return unique(x, /*sort = */ true );
+    }
+  ',
+    debug = TRUE
+  ),
+  restricted = cpp_source(
+    code = '
+    #include <cppally.hpp>
+    using namespace cppally;
+
+    template <RVector T>
+    requires (requires (T obj){ unique(obj); })
+    [[cppally::register]]
+    T sorted_unique2(T x){
+      return unique(x, /*sort = */ true );
+    }
+  ',
+    debug = TRUE,
+    scalar_types = c("r_int", "r_dbl"),
+    r_sexp = FALSE,
+    data_frames = FALSE,
+    factors = FALSE
+  ),
+  check = FALSE,
+  memory = FALSE,
+  iterations = 1
+)
+
+sorted_unique(c(1, 1, 2, 2, 3, 3))
+sorted_unique2(c(1, 1, 2, 2, 3, 3))
+
+sorted_unique(c("A", "A", "B", "B", "C", "C"))
+
+# Expected to fail
+try(sorted_unique2(c("A", "A", "B", "B", "C", "C")))
+
+# In production code and regular usage,
+# you would call `use_template_dispatch_candidates(c("r_int", "r_dbl"))`
+# which will add the relevant flag to your Makevars file(s).
 }
+rm(cpp_eval)
 
 }
 \seealso{
-\link{cpp_register}
+\link{cpp_register} \link{use_template_dispatch_candidates}
 }

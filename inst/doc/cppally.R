@@ -6,11 +6,10 @@ knitr::opts_chunk$set(
 )
 
 ## ----include = FALSE----------------------------------------------------------
-required <- c("bench", "brio", "callr", "cli", "decor",
+required <- c("brio", "callr", "cli", "decor",
               "desc", "glue", "purrr", "readr", "stringr",
-              "utils", "vctrs", "withr")
+              "usethis", "utils", "vctrs", "withr")
 if (!all(vapply(required, requireNamespace, logical(1), quietly = TRUE))) {
-  knitr::opts_chunk$set(eval = FALSE)
   knitr::knit_exit()
 }
 
@@ -18,11 +17,24 @@ if (!all(vapply(required, requireNamespace, logical(1), quietly = TRUE))) {
 library(cppally)
 
 ## ----include=FALSE------------------------------------------------------------
+not_cran <- function(){
+ nzchar(Sys.getenv("CI")) || identical(Sys.getenv("NOT_CRAN"), "true") 
+}
 # Helpers to compile all examples in debug mode
 cpp_source <- function(..., code, debug = TRUE, env = parent.frame()){
   preamble <- c("#include <cppally.hpp>", "using namespace cppally;")
   code <- paste(c(preamble, code), collapse = "\n")
-  cppally::cpp_source(debug = debug, env = env, code = code, ...)
+  tryCatch(
+    cppally::cpp_source(
+      debug = debug, env = env, code = code, ...), 
+    error = function(e) {
+      
+      if (not_cran()){
+        stop(e)
+      }
+      knitr::knit_exit()
+    }
+  )
 }
 cpp_eval <- function(..., debug = TRUE, env = parent.frame()){
     cppally::cpp_eval(debug = debug, env = env, ...)
@@ -44,9 +56,21 @@ register_single_exprs <- function(exprs, env = parent.frame(), ...){
   if (is.null(names(exprs))){
     stop("`exprs` must be named")
   }
-  utils::getFromNamespace("source_single_exprs", "cppally")(
-    exprs, env = env, ...
+  compiled <- tryCatch({
+    utils::getFromNamespace("source_single_exprs", "cppally")(
+      exprs, env = env, ...
     )
+    TRUE
+  }, error = function(e) {
+    if (not_cran()){
+      stop(e)
+    }
+    knitr::knit_exit()
+    FALSE
+  })
+  if (!compiled){
+    return(invisible())
+  }
   wrappers <- setNames(
     lapply(seq_along(exprs), \(i) {
       fn <- get(paste0("f", i), envir = env)
@@ -73,7 +97,7 @@ void hello_world(){
 }',
   lgl_ops = '
 [[cppally::register]]
-r_vec<r_lgl> lgl_ops(){
+r_vector<r_lgl> lgl_ops(){
   return make_vec<r_lgl>(
     r_true || r_false, // true
     r_true && r_false, // false
@@ -158,25 +182,25 @@ bool cpp_identical(T x, U y){
   new_integer_vector = '
 // Integer vector of size n
 [[cppally::register]]
-r_vec<r_int> new_integer_vector(int n){
-  r_vec<r_int> int_vctr(n, /*fill = */ r_int(0));
+r_vector<r_int> new_integer_vector(int n){
+  r_vector<r_int> int_vctr(n, /*fill = */ r_int(0));
   return int_vctr;
 }
 ',
   all_vectors = '
 [[cppally::register]]
-r_vec<r_sexp> all_vectors(){
+r_vector<r_sexp> all_vectors(){
   return make_vec<r_sexp>(
-    arg("logical") = r_vec<r_lgl>(),
-    arg("integer") = r_vec<r_int>(),
-    arg("integer64") = r_vec<r_int64>(), // Requires bit64
-    arg("double") = r_vec<r_dbl>(),
-    arg("character") = r_vec<r_str>(),
-    arg("character") = r_vec<r_str_view>(),
-    arg("raw") = r_vec<r_raw>(),
-    arg("date") = r_vec<r_date>(),
-    arg("date-time") = r_vec<r_psxct>(),
-    arg("list") = r_vec<r_sexp>()
+    arg("logical") = r_vector<r_lgl>(),
+    arg("integer") = r_vector<r_int>(),
+    arg("integer64") = r_vector<r_int64>(), // Requires bit64
+    arg("double") = r_vector<r_dbl>(),
+    arg("character") = r_vector<r_str>(),
+    arg("character") = r_vector<r_str_view>(),
+    arg("raw") = r_vector<r_raw>(),
+    arg("date") = r_vector<r_date>(),
+    arg("date-time") = r_vector<r_psxct>(),
+    arg("list") = r_vector<r_sexp>()
   );
 }
 ',
@@ -231,17 +255,17 @@ r_int double_to_int(r_dbl x){
 ',
   to_int_vec = '
 [[cppally::register]]
-r_vec<r_int> to_int_vec(r_vec<r_dbl> x){
-  return as<r_vec<r_int>>(x);
+r_vector<r_int> to_int_vec(r_vector<r_dbl> x){
+  return as<r_vector<r_int>>(x);
 }
 ',
   coercions = '
 [[cppally::register]]
-r_vec<r_sexp> coercions(){
+r_vector<r_sexp> coercions(){
     r_dbl a(4.2);
-    r_vec<r_dbl> b = make_vec<r_dbl>(2.5);
+    r_vector<r_dbl> b = make_vec<r_dbl>(2.5);
     return make_vec<r_sexp>(
-        as<r_vec<r_int>>(a),
+        as<r_vector<r_int>>(a),
         as<r_int>(a),
         as<r_int>(b),
         as<r_dbl>(b)
@@ -267,7 +291,7 @@ r_str str_concatenate(r_str x, r_str y, r_str sep){
 }
 ',
   new_list = '
-using list = r_vec<r_sexp>;
+using list = r_vector<r_sexp>;
 
 [[cppally::register]]
 list new_list(int n){
@@ -276,7 +300,7 @@ list new_list(int n){
 ',
   resize_all = '
 [[cppally::register]]
-r_vec<r_sexp> resize_all(r_vec<r_sexp> x, r_size_t n){
+r_vector<r_sexp> resize_all(r_vector<r_sexp> x, r_size_t n){
     r_size_t list_length = x.length();
     for (r_size_t i = 0; i < list_length; ++i){
         r_sexp_visit(x.view(i), [&]<RVector T>(T vec) {
@@ -288,7 +312,7 @@ r_vec<r_sexp> resize_all(r_vec<r_sexp> x, r_size_t n){
 ',
   new_factor = '
 [[cppally::register]]
-r_factors new_factor(r_vec<r_str> x){
+r_factors new_factor(r_vector<r_str> x){
 	return r_factors(x);
 }
 ',
@@ -296,7 +320,7 @@ r_factors new_factor(r_vec<r_str> x){
 static_assert(!RVector<r_factors>);
 
 [[cppally::register]]
-r_vec<r_int> factor_codes(r_factors x){
+r_vector<r_int> factor_codes(r_factors x){
 	return x.codes();
 }
 ',
@@ -325,31 +349,37 @@ r_vector<r_lgl> cpp_not_in(r_vector<r_str> x, r_vector<r_str> table){
 }
 ',
 cpp_subset = '
-template <RVector T, typename subscript_t>
-requires any<subscript_t, r_lgl, r_int, r_str>
+template <typename T, typename subscript_t>
+requires (
+  any<subscript_t, r_lgl, r_int, r_str> &&
+  any<T, r_int, r_dbl, r_str>
+)
 [[cppally::register]]
-T cpp_subset(T x, r_vector<subscript_t> y){
+r_vector<T> cpp_subset(r_vector<T> x, r_vector<subscript_t> y){
     return subset(x, y);
 }
 ',
 cpp_negative_subset = '
-template <RVector T, typename subscript_t>
-requires any<subscript_t, r_lgl, r_int, r_str>
+template <typename T, typename subscript_t>
+requires (
+  any<subscript_t, r_lgl, r_int, r_str> &&
+  any<T, r_int, r_dbl, r_str>
+)
 [[cppally::register]]
-T cpp_negative_subset(T x, r_vector<subscript_t> y){
+r_vector<T> cpp_negative_subset(r_vector<T> x, r_vector<subscript_t> y){
     return subset(x, y, /*invert=*/ true);
 }
 ',
   setnames = '
 [[cppally::register]]
-r_vec<r_sexp> set_list_names(r_vec<r_sexp> x, r_vec<r_str> names){
+r_vector<r_sexp> set_list_names(r_vector<r_sexp> x, r_vector<r_str> names){
   x.set_names(names);
   return x;
 }
 ',
 cpp_seq_len = '
 [[cppally::register]]
-r_vec<r_int> cpp_seq_len(r_size_t n){
+r_vector<r_int> cpp_seq_len(r_size_t n){
   return sequence(n, /* from = */ r_int(1), /* by = */ r_int(1));
 }
 ',
@@ -357,47 +387,231 @@ cpp_sequences = '
 template <typename T>
 requires (any<T, r_int, r_int64, r_dbl>)
 [[cppally::register]]
-r_vec<r_sexp> cpp_sequences(r_vec<r_int> size, r_vec<T> from, r_vec<T> by){
+r_vector<r_sexp> cpp_sequences(r_vector<r_int> size, r_vector<T> from, r_vector<T> by){
     return pmap([](auto a, auto b, auto c){
         return as<r_sexp>(sequence(a, b, c));
     }, size, from, by);
 }
-'
-)
-
-# Benchmarks need debug = FALSE
-benchmark_examples <- c(
-  cpp_n_unique = '
-template <RVector T>
+',
+get_time = '
 [[cppally::register]]
-r_int cpp_n_unique(T x){
-  return as<r_int>(n_unique(x));
+r_date get_today(){
+  return r_date::today();
+}
+[[cppally::register]]
+r_psxct get_now(){
+  return r_psxct::now();
 }
 ',
-  primitive_sum = '
+
+get_time_components = '
 [[cppally::register]]
-double primitive_sum(const r_vec<r_dbl>& x){
+r_int get_year(r_date x){
+  return x.year();
+}
+[[cppally::register]]
+r_int get_month(r_date x){
+  return x.month();
+}
+[[cppally::register]]
+r_int get_week(r_date x){
+  return x.week();
+}
+[[cppally::register]]
+r_int get_day(r_date x){
+  return x.day();
+}
+[[cppally::register]]
+r_int get_wday(r_date x, int week_start){
+  return x.wday(week_start);
+}
+[[cppally::register]]
+r_int get_yday(r_date x){
+  return x.yday();
+}
+[[cppally::register]]
+r_int get_iso_week(r_date x){
+  return x.iso_week();
+}
+[[cppally::register]]
+r_int get_iso_year(r_date x){
+  return x.iso_year();
+}
+',
+time_round = '
+[[cppally::register]]
+r_date floor_month(r_date x){
+  return x.floor<"months">();
+}
+[[cppally::register]]
+r_date ceiling_year(r_date x){
+  return x.ceiling<"years">();
+}
+[[cppally::register]]
+r_date round_week(r_date x, int week_start){
+  return x.round<"weeks">(week_start);
+}
+',
+create_date = '
+[[cppally::register]]
+r_date create_date(int year, int month, int day){
+  return r_date(year, month, day);
+}
+[[cppally::register]]
+r_date date_from_epoch_offset(double n){
+  return r_date(n);
+}
 
-  // r_vec<T>::data_type always returns typename T
-  using data_t = typename std::remove_cvref_t<decltype(x)>::data_type;
+[[cppally::register]]
+r_psxct create_datetime(int year, int month, int day, int hour, int minute, double second){
+  return r_psxct(year, month, day, hour, minute, second);
+}
+[[cppally::register]]
+r_psxct datetime_from_epoch_offset(double n){
+  return r_psxct(n);
+}
+',
+add_time = '
+[[cppally::register]]
+r_date add_days(r_date x, double n){
+  return x.add<"days">(n);
+}
+[[cppally::register]]
+r_date add_months(r_date x, double n){
+  return x.add<"months">(n);
+}
+',
+datetime_months = '
+[[cppally::register]]
+r_psxct as_dt(r_date x){
+  return x.as_datetime();
+}
+[[cppally::register]]
+r_psxct dt_add_months(r_psxct x, double n){
+  return x.add<"months">(n);
+}
+[[cppally::register]]
+r_dbl dt_diff_months(r_psxct x, r_psxct y){
+  return time_diff<"months">(x, y);
+}
+',
+time_diff = '
+[[cppally::register]]
+r_dbl diff_days(r_date x, r_date y){
+  return time_diff<"days">(x, y);
+}
+[[cppally::register]]
+r_dbl diff_months(r_date x, r_date y){
+  return time_diff<"months">(x, y);
+}
+',
+r_get_today = '
+[[cppally::register]]
+r_date r_get_today(){
+  r_function sys_date("Sys.Date");
+  return as<r_date>(sys_date());
+}
+',
+base_sum_fn = '
+[[cppally::register]]
+r_function base_sum_fn(){
+  return r_function(cached_sym<"sum">(), pkg_env<"base">());
+}
+',
 
-  using primitive_t = unwrap_t<data_t>;
-  primitive_t *p_x = x.data();
+base_sum = '
+[[cppally::register]]
+r_dbl base_sum(r_vector<r_dbl> x, bool na_rm){
+  return as<r_dbl>(base_sum_fn()(x, arg("na.rm") = na_rm));
+}
+',
+cpp_unique = '
+template <typename T>
+requires (any<T, r_int, r_dbl, r_str>)
+[[cppally::register]]
+r_int cpp_n_unique(r_vector<T> x){
+  return as<r_int>(n_unique(x));
+}
 
-  r_size_t n = x.length();
-  double sum = 0;
+template <RVector T>
+[[cppally::register]]
+T cpp_unique(T x, bool sort){
+  return unique(x, sort);
+}
 
-  OMP_SIMD_REDUCTION1(+:sum)
-  for (r_size_t i = 0; i < n; ++i){
-    sum += p_x[i];
-  }
-  return sum;
+',
+cpp_sort = '
+template <typename T>
+requires (any<T, r_int, r_dbl, r_str>)
+[[cppally::register]]
+r_vector<T> cpp_sort(r_vector<T> x){
+  return sort(x);
+}
+',
+
+make_groups = '
+[[cppally::register]]
+r_vector<r_sexp> group_info(r_vector<r_str> x){
+  groups g = make_groups(x, /*ordered=*/ false);
+  return make_vec<r_sexp>(
+    arg("group_id") = g.ids,
+    arg("n_groups") = g.n_groups,
+    arg("ordered") = g.ordered,
+    arg("sorted") = g.sorted,
+    arg("starts") = g.starts(),
+    arg("counts") = g.counts(),
+    arg("order") = g.order(),
+    arg("group_names") = group_names(x, g)
+  );
+}
+',
+group_counts = '
+[[cppally::register]]
+r_df group_counts(r_vector<r_str> x){
+  groups g = make_groups(x, /*ordered=*/ false);
+  
+  return make_df(
+    arg("key") = subset(x, g.starts()),
+    arg("count") = g.counts()
+  );
+}
+',
+cpp_stats = '
+template <RNumber T>
+[[cppally::register]]
+r_dbl cpp_sum(r_vector<T> x, bool na_rm){
+  return as<r_dbl>(sum(x, na_rm));
+}
+template <RNumber T>
+[[cppally::register]]
+r_vector<T> cpp_range(r_vector<T> x, bool na_rm){
+  return range(x, na_rm);
+}
+template <RNumber T>
+[[cppally::register]]
+r_dbl cpp_var(r_vector<T> x, bool na_rm){
+  return var(x, na_rm);
+}
+template <RNumber T>
+[[cppally::register]]
+r_vector<r_dbl> cpp_quantile(r_vector<T> x, r_vector<r_dbl> probs, bool na_rm, bool names){
+  return quantile(x, probs, na_rm, names); 
+}
+',
+cpp_set_threads = '
+[[cppally::register]]
+void cpp_set_threads(int n){
+  set_threads(n);
+}
+
+[[cppally::register]]
+int cpp_get_threads(){
+  return get_threads();
 }
 '
 )
 
 cpp_source(code = paste(examples, collapse = "\n"), debug = TRUE)
-cpp_source(code = paste(benchmark_examples, collapse = "\n"), debug = FALSE)
 
 # Single-line expressions, pre-registered as R functions of the same name.
 # Each can be invoked later as e.g. `r_true_val()` to get the evaluated result.
@@ -449,6 +663,27 @@ hello_world()
 
 ## -----------------------------------------------------------------------------
 cpp_eval('print("Hello World Again!")')
+
+## ----include=FALSE------------------------------------------------------------
+cppally::cpp_source(code = '
+#include <cppally/vector/r_vector.h>
+using namespace cppally;
+
+[[cppally::register]]
+r_vector<r_int> new_integers(int n, std::optional<r_int> fill){
+  if (fill.has_value()){
+    return r_vector<r_int>(n, fill.value()); // Filled with `fill`
+  } else {
+    return r_vector<r_int>(n, r_int(0)); // Filled with zeroes
+  }
+}
+                    ', 
+  debug = TRUE)
+
+
+## -----------------------------------------------------------------------------
+new_integers(3)
+new_integers(3, fill = NA)
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(paste(
@@ -695,6 +930,108 @@ as_cpp_chunk(examples[["str_concatenate"]])
 str_concatenate("hello", "how are you?", sep = ", ")
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["create_date"]])
+
+## -----------------------------------------------------------------------------
+create_date(1970, 1, 1); # This builds the Unix epoch date
+
+## -----------------------------------------------------------------------------
+date_from_epoch_offset(0) # Also builds the Unix epoch
+
+## -----------------------------------------------------------------------------
+create_datetime(1970, 1, 1, 0, 0, 0); # Unix epoch date-time
+datetime_from_epoch_offset(0)         # Unix epoch from an offset
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["get_time"]])
+
+## -----------------------------------------------------------------------------
+get_today()
+get_now()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["add_time"]])
+
+## -----------------------------------------------------------------------------
+y2k <- create_date(2000, 1, 1)
+
+# Day after y2k
+y2k |>
+  add_days(1)
+
+# Week after y2k
+y2k |>
+  add_days(7)
+
+# Month after y2k
+y2k |>
+  add_months(1)
+
+# Year after y2k
+y2k |>
+  add_months(12)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["get_time_components"]])
+
+## -----------------------------------------------------------------------------
+get_year(y2k)
+get_month(y2k)
+get_week(y2k)
+get_day(y2k) # Day of the month
+get_wday(y2k, week_start = 1) # week_start = 1 = Mon
+get_yday(y2k)
+
+## -----------------------------------------------------------------------------
+get_iso_week(y2k) # Last (52nd) ISO week of the ISO year
+get_iso_year(y2k) # ISO year is still 1999
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["time_round"]])
+
+## -----------------------------------------------------------------------------
+# Start of the month after advancing 100 days
+y2k |> 
+  add_days(100) |> 
+  floor_month()
+
+# ceiling() does not switch on boundary
+y2k |> 
+  ceiling_year()
+
+y2k |> 
+  add_days(1) |> 
+  ceiling_year()
+
+y2k |> 
+  round_week(week_start = 1)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["time_diff"]])
+
+## -----------------------------------------------------------------------------
+x <- y2k
+y <- x |> add_months(3)
+
+diff_days(x, y)
+diff_months(x, y)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["datetime_months"]])
+
+## -----------------------------------------------------------------------------
+y2k_datetime <- as_dt(y2k)
+
+mid_month <- y2k_datetime |> 
+  dt_add_months(0.5)
+
+# Half-way through the month 
+mid_month
+
+## -----------------------------------------------------------------------------
+dt_diff_months(y2k_datetime, mid_month)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(single_exprs[["r_sym_new"]])
 
 ## ----echo=FALSE---------------------------------------------------------------
@@ -742,6 +1079,24 @@ letter_fct <- new_factor(letters)
 
 letter_fct |>
     factor_codes()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["r_get_today"]])
+
+## -----------------------------------------------------------------------------
+r_get_today()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["base_sum_fn"]])
+
+## -----------------------------------------------------------------------------
+base_sum_fn()
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["base_sum"]])
+
+## -----------------------------------------------------------------------------
+base_sum(c(NA, 1:3, NA), na_rm = TRUE)
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
 as_cpp_chunk(examples[["find_empty_string"]])
@@ -866,20 +1221,98 @@ cpp_sequences(1:3, from = 0L, by = 1L) |>
 sequence(1:3, from = 0L, by = 1L)
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
-as_cpp_chunk(benchmark_examples[["cpp_n_unique"]])
+as_cpp_chunk(examples[["cpp_set_threads"]])
 
 ## -----------------------------------------------------------------------------
-library(bench)
-x <- sample(1:100, 10^5, replace = TRUE)
-mark(
-  base_n_unique = length(unique(x)),
-  cppally_n_unique = cpp_n_unique(x)
-)
+
+cpp_set_threads(2) # Set to 2 threads
+cpp_get_threads()  # Number of threads now available
+
+cpp_set_threads(1) # Reset back to 1
+cpp_get_threads()  # Should return 1
 
 ## ----echo=FALSE, results = 'asis'---------------------------------------------
-as_cpp_chunk(benchmark_examples[["primitive_sum"]])
+as_cpp_chunk(examples[["cpp_stats"]])
 
 ## -----------------------------------------------------------------------------
-x <- rnorm(10^5)
-primitive_sum(x)
+set.seed(1)
+x <- sample.int(10, 10^4, replace = TRUE)
+x[sample.int(10^4, 10^3)] <- NA # Add many NAs
+
+# Sum
+cpp_sum(x, na_rm = TRUE)
+cpp_sum(x, na_rm = FALSE)
+
+# Range
+cpp_range(x, na_rm = TRUE)
+cpp_range(x, na_rm = FALSE)
+
+# Variance
+cpp_var(x, na_rm = TRUE)
+cpp_var(x, na_rm = FALSE)
+
+cpp_quantile(x, c(0.25, 0.75), na_rm = TRUE, names = TRUE)
+
+# Many probabilities
+cpp_quantile(x, seq(0, 1, 0.05), na_rm = TRUE, names = FALSE)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_unique"]])
+
+## -----------------------------------------------------------------------------
+x <- sample(1:10, 10^4, replace = TRUE)
+
+cpp_n_unique(x)
+length(unique(x))
+
+cpp_unique(x, sort = FALSE)
+unique(x)
+
+cpp_unique(x, sort = TRUE)
+sort(unique(x))
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["cpp_sort"]])
+
+## -----------------------------------------------------------------------------
+# Small data
+cpp_sort(c(3, 2, NA, 1))
+
+# Integer data
+ints <- sample.int(10, 20, replace = TRUE)
+cpp_sort(ints)
+
+# Double-floating point precision data
+dbls <- as.double(ints)
+cpp_sort(dbls)
+
+# String data
+strs <- dbls |> paste0()
+cpp_sort(strs)
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["make_groups"]])
+
+## -----------------------------------------------------------------------------
+set.seed(1)
+x <- sample(c("A", "B", "C"), 20, replace = TRUE)
+
+# Convert into group info
+
+letter_groups <- group_info(x)
+
+letter_groups$group_id # Group IDs
+letter_groups$n_groups # Number of groups
+letter_groups$ordered  # Groups were collected using order-of-first-appearance
+letter_groups$sorted   # Are group IDs in sorted order?
+letter_groups$starts   # Data start locations (0-indexed)
+letter_groups$counts   # Group counts
+letter_groups$order    # Order permutation (0-indexed)
+letter_groups$group_names # Names of unique groups
+
+## ----echo=FALSE, results = 'asis'---------------------------------------------
+as_cpp_chunk(examples[["group_counts"]])
+
+## -----------------------------------------------------------------------------
+group_counts(x)
 

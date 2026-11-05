@@ -1,0 +1,157 @@
+#ifndef CPPALLY_R_UTILS_H
+#define CPPALLY_R_UTILS_H
+
+#include <cppally/r_setup.h>
+#include <cppally/r_concepts.h>
+#include <cppally/std_compat.h>
+#include <utility>
+#include <limits>
+#include <cmath>
+#include <version>
+#include <type_traits>
+
+namespace cppally {
+
+// Maximum available threads
+inline int max_threads() noexcept {
+  return OMP_MAX_THREADS;
+}
+// get the number of OMP threads currently set for use
+inline int get_threads() noexcept {
+  const int upper = max_threads();
+  int n_threads = internal::CPPALLY_N_THREADS > upper ? upper : internal::CPPALLY_N_THREADS;
+  return n_threads > 1 ? n_threads : 1;
+}
+// Set number threads to be used throughout the program
+inline void set_threads(int n) noexcept {
+  internal::CPPALLY_N_THREADS = (n < 1 ? 1 : n);
+}
+
+// Recycle loop indices
+// `v` is an index to be recycled
+// `size` is the size of the vector that we are indexing with `v`
+template <CppNumber T>
+inline constexpr void recycle_index(T& v, T size) noexcept {
+  v = (++v == size) ? T(0) : v;
+}
+
+// inline bool xor_(bool a, bool b) {
+//   return (a + b) == 1;
+// }
+
+namespace internal {
+
+consteval double exp2(int n) noexcept {
+  double out = 1.0;
+  while (n-- > 0){
+    out *= 2.0;
+  }
+  return out;
+}
+
+// constexpr abs() since std::abs isn't constexpr until C++23
+// Only defined for arithmetic types.
+// This may retain negative zeroes and negative-signed NaN but
+// that's okay since we never want to distinguish those in outputs the user cares about.
+template <CppNumber T>
+constexpr T abs2(T x) noexcept {
+  #if defined(__cpp_lib_constexpr_cmath) && __cpp_lib_constexpr_cmath >= 202202L
+    return std::abs(x);
+  #else 
+    return std::is_constant_evaluated() ? (x < 0 ? -x : x) : std::abs(x);
+  #endif
+}
+
+// Complete loss means the value can't survive the cast in any recognisable
+// form: integer overflow, float overflow, Inf/NaN into an integer.
+// Precision loss (fraction truncation, mantissa rounding) is tolerated.
+template <CppMathType To, CppMathType From>
+constexpr bool numeric_can_be_cast_without_complete_loss(From x) noexcept {
+  
+  constexpr To upper = std::numeric_limits<To>::max();
+
+  if constexpr (lossless_numeric_cast<From, To>()){
+    return true;
+  } else if constexpr (CppIntegerType<From> && CppIntegerType<To>){
+    constexpr To lower = std::numeric_limits<To>::min();
+    return internal::cmp_greater_equal(+x, +lower) && internal::cmp_less_equal(+x, +upper);
+  } else if constexpr (CppIntegerType<From> && CppFloatType<To>){
+    // int -> float: magnitude always fits; only precision is lost (tolerated)
+    return true;
+  } else if constexpr (CppIntegerType<To> && CppFloatType<From>){
+    // Float -> integer: fractions truncate toward zero, out-of-range is complete loss
+    // Open upper bound: 2^digits is exact in From whereas To's max may round up
+    constexpr From hi = exp2(std::numeric_limits<To>::digits);
+    return (std::is_signed_v<To> ? x >= -hi : x > -1.0) && x < hi; // also rejects Inf/NaN
+  } else {
+    constexpr From to_max = static_cast<From>(upper);
+    constexpr From inf = std::numeric_limits<From>::infinity();
+    // Narrowing float -> float, e.g. double -> float: overflow to Inf is complete loss
+    return (x >= -to_max && x <= to_max) || abs2(x) == inf;
+  }
+}
+
+// Exact whole-number test
+// inline bool is_exact_whole(double x) noexcept {
+//     return (std::trunc(x) == x) && !std::isinf(x);
+// }
+
+// Safely check at runtime that numeric cast is lossless
+template <CppMathType To, CppMathType From>
+constexpr bool numeric_cast_is_lossless(From x) noexcept {
+    return numeric_can_be_cast_without_complete_loss<To>(x) && numeric_can_be_cast_without_complete_loss<From>(static_cast<To>(x)) && static_cast<From>(static_cast<To>(x)) == x;
+}
+
+// constexpr floor
+constexpr double floor2(double x) noexcept {
+
+  #if defined(__cpp_lib_constexpr_cmath) && __cpp_lib_constexpr_cmath >= 202202L
+    return std::floor(x);
+  #else
+
+    if (!std::is_constant_evaluated()){
+      return std::floor(x);
+    }
+    
+    // If x is very large then it won't have a fractional part anyway
+    if (!numeric_can_be_cast_without_complete_loss<int64_t>(x)){
+      return x;
+    }
+
+    // If the round-trip from double -> int64_t -> double is lossless (i.e identity preserving), then it needs no flooring since it's a whole number
+    if (numeric_cast_is_lossless<int64_t>(x)){
+      return x;
+    }
+    int64_t int_res = x < 0 ? static_cast<int64_t>(x) - 1 : static_cast<int64_t>(x);
+    return static_cast<double>(int_res);
+  #endif
+}
+
+inline int calc_threads(r_size_t data_size){
+  if (data_size < CPPALLY_OMP_THRESHOLD){
+    return 1;
+  }
+  return OMP_IN_PARALLEL ? 1 : get_threads();
+}
+
+// Runs body(c, start, end) over n_chunks of contiguous ranges of [0, n).
+template <typename F>
+inline void for_each_chunk(uint32_t n, uint32_t n_chunks, const F& body) {
+    static_assert(noexcept(body(0u, 0u, 0u)), "chunk bodies may run inside an OMP region and must not throw");
+    if (n_chunks > 1) {
+        OMP_PARALLEL_FOR(n_chunks)
+        for (uint32_t c = 0; c < n_chunks; ++c) {
+            uint32_t start = static_cast<uint32_t>(static_cast<uint64_t>(n) * c / n_chunks);
+            uint32_t end = static_cast<uint32_t>(static_cast<uint64_t>(n) * (c + 1) / n_chunks);
+            body(c, start, end);
+        }
+    } else {
+        body(0u, 0u, n);
+    }
+}
+
+}
+
+}
+
+#endif

@@ -1,15 +1,17 @@
 Package: cppally
 Title: A 'C++20' API for R
-Version: 1.1.0
+Version: 1.2.0
 Authors@R: c(
     person("Nick", "Christofides", , "nick.christofides.r@gmail.com", role = c("aut", "cre", "cph"),
            comment = c(ORCID = "0000-0002-9743-7342")),
     person("Martin Leitner-Ankerl", role = "cph",
            comment = "Author of bundled ankerl::unordered_dense library"),
     person("Malte Skarupke", role = "cph",
-           comment = "Author of bundled ska_sort library"),
+           comment = "Author of ska_sort, from which to_radix_key in sort.h is adapted"),
+    person("Ryo Suzuki", role = "cph",
+           comment = "Author of bundled Xoshiro-cpp library"),
     person("Posit Software, PBC", role = "cph",
-           comment = "SEXP protection mechanism in r_protect.h inspired by cpp11"))
+           comment = "SEXP protection mechanism in r_sexp.h inspired by cpp11"))
 Maintainer: Nick Christofides <nick.christofides.r@gmail.com>
 Description: A header-only 'C++20' API for manipulating R data structures
     from 'C++'. Provides 'C++20' concepts specific to R, custom scalar and
@@ -23,8 +25,9 @@ URL: https://nicchr.github.io/cppally/
 BugReports: https://github.com/NicChr/cppally/issues/
 Depends: R (>= 4.5.0)
 Suggests: bench, bit64, brio, callr, cli, cpp11, decor, desc, devtools,
-        fs, glue, knitr, pkgload, purrr, readr, rmarkdown, roxygen2,
-        rstudioapi, stringr, testthat (>= 3.0.0), usethis, vctrs, withr
+        fs, ggplot2, glue, knitr, pkgbuild, pkgload, purrr, readr,
+        rmarkdown, roxygen2, rstudioapi, stringr, testthat (>= 3.0.0),
+        tidyr, usethis, vctrs, withr
 VignetteBuilder: knitr
 Config/Needs/cppally/cpp_register: brio, cli, decor, desc, glue, purrr,
         readr, stringr, vctrs, withr
@@ -32,14 +35,17 @@ Config/testthat/edition: 3
 Encoding: UTF-8
 SystemRequirements: C++20
 Config/roxygen2/version: 8.0.0
+Config/Needs/website: rmarkdown
 NeedsCompilation: no
-Packaged: 2026-07-12 11:33:38 UTC; Nmc5
+Packaged: 2026-11-05 13:00:10 UTC; Nmc5
 Author: Nick Christofides [aut, cre, cph] (ORCID:
     <https://orcid.org/0000-0002-9743-7342>),
   Martin Leitner-Ankerl [cph] (Author of bundled ankerl::unordered_dense
     library),
-  Malte Skarupke [cph] (Author of bundled ska_sort library),
-  Posit Software, PBC [cph] (SEXP protection mechanism in r_protect.h
+  Malte Skarupke [cph] (Author of ska_sort, from which to_radix_key in
+    sort.h is adapted),
+  Ryo Suzuki [cph] (Author of bundled Xoshiro-cpp library),
+  Posit Software, PBC [cph] (SEXP protection mechanism in r_sexp.h
     inspired by cpp11)
 Repository: CRAN
-Date/Publication: 2026-07-12 12:10:02 UTC
+Date/Publication: 2026-11-05 14:40:02 UTC

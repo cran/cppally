@@ -4,9 +4,10 @@
 #include <concepts>
 #include <type_traits>
 #include <cstdint> // For uint32_t and similar
+#include <string_view>
 #include <complex> // For complex<double>
 #include <limits>
-#include <utility> // for cmp_less_equal
+#include <cppally/std_compat.h> // for cmp_less_equal
 
 
 // Forward declarations
@@ -45,12 +46,10 @@ struct r_str_view;
 struct r_cplx;
 struct r_raw;
 struct r_sym;
-struct r_sexp; 
+struct r_sexp;
 struct r_date;
 struct r_psxct;
-
-// Are long vectors supported?
-constexpr bool long_vectors_supported = !std::is_same_v<int, r_size_t>;
+struct r_function;
 
 // Concepts to enable R type templates
 
@@ -81,7 +80,10 @@ template <typename T>
 concept RIntegerType = RLogicalType<T> || RShortIntegerType<T> || RLongIntegerType<T>;
 
 template <typename T>
-concept CppIntegerType = std::is_integral_v<std::remove_cvref_t<T>>;
+concept CppIntegerNumber = std::is_integral_v<std::remove_cvref_t<T>> && !is<T, bool> && !CppCharType<T>;
+
+template <typename T>
+concept CppIntegerType = CppLogicalType<T> || CppCharType<T> || CppIntegerNumber<T>;
 
 template <typename T>
 concept IntegerType = RIntegerType<T> || CppIntegerType<T>;
@@ -99,16 +101,13 @@ template <typename T>
 concept RIntegerNumber = RShortIntegerType<T> || RLongIntegerType<T>;
 
 template <typename T>
-concept CppIntegerNumber = std::is_integral_v<std::remove_cvref_t<T>> && !is<T, bool> && !CppCharType<T>;
-
-template <typename T>
 concept IntegerNumber = RIntegerNumber<T> || CppIntegerNumber<T>;
 
 template <typename T>
 concept RNumber = RIntegerNumber<T> || RFloatType<T>;
 
 template <typename T>
-concept CppNumber = std::is_arithmetic_v<std::remove_cvref_t<T>> && !is<T, bool> && !CppCharType<T>;
+concept CppNumber = CppIntegerNumber<T> || CppFloatType<T>;
 
 template <typename T>
 concept Number = RNumber<T> || CppNumber<T>;
@@ -148,7 +147,7 @@ template <typename T>
 concept RMathType = RLogicalType<T> || RNumber<T>;
 
 template <typename T>
-concept CppMathType = std::is_arithmetic_v<std::remove_cvref_t<T>>;
+concept CppMathType = CppLogicalType<T> || CppCharType<T> || CppNumber<T>;
 
 template <typename T>
 concept MathType = RMathType<T> || CppMathType<T>;
@@ -168,13 +167,16 @@ template <typename T>
 concept CStringType = is<T, const char*>;
 
 template <typename T>
+concept CppStringType = CStringType<T> || (std::is_class_v<T> && std::convertible_to<const T&, std::string_view>);
+
+template <typename T>
 concept RStringType = any<T, r_str, r_str_view>;
 
 template <typename T>
 concept RSortableType = RNumericType<T> || RStringType<T>;
 
 template <typename T>
-concept CppSortableType = CppNumericType<T> || any<T, std::string, std::string_view>;
+concept CppSortableType = (CppNumericType<T> || CppStringType<T>) && !CStringType<T>;
 
 template <typename T>
 concept SortableType = RSortableType<T> || CppSortableType<T>;
@@ -192,9 +194,8 @@ concept RScalar = RNumericType<T> || RComplexType<T> || RStringType<T> || RRawTy
 template <typename T>
 concept RVal = RScalar<T> || is<T, r_sexp>;
 
-// Types that are OMP friendly (i.e. they can work safely with OMP simd, reductions and parallel clauses)
 template <typename T>
-concept RVectorisable = RScalar<T> && !RObject<T>;
+concept RFunction = is<T, r_function>;
 
 // Forward declare vector-based structs
 template <RVal T>
@@ -251,7 +252,7 @@ concept RComposite = RVector<T> || RMetaVector<T> || RDataFrame<T>;
 
 // All R types defined by cppally
 template <typename T>
-concept CppallyType = RVal<T> || RSymbolType<T> || RComposite<T>;
+concept CppallyType = RVal<T> || RSymbolType<T> || RComposite<T> || RFunction<T>;
 
 template <typename T>
 concept CppType = !CppallyType<T>;
@@ -289,11 +290,11 @@ inline consteval bool lossless_numeric_cast(){
         return false;
     } else {
         if constexpr (CppIntegerType<From> && CppIntegerType<To>){
-            return std::cmp_less_equal(
+            return internal::cmp_less_equal(
                 +std::numeric_limits<To>::min(),
                 +std::numeric_limits<From>::min()
             ) &&
-            std::cmp_greater_equal(
+            internal::cmp_greater_equal(
                 +std::numeric_limits<To>::max(),
                 +std::numeric_limits<From>::max()
             );
@@ -311,7 +312,7 @@ inline consteval bool lossless_numeric_cast(){
 
 };
 
-// C/C++ -> RScalar mappings
+// C/C++ -> RScalar mappings (many-to-one)
 // RScalar maps to RScalar (identity)
 
 template <typename T>
@@ -320,18 +321,19 @@ struct r_scalar_mapping {};
 template <RScalar T>
 struct r_scalar_mapping<T> { using type = T; };
 
-template<> struct r_scalar_mapping<bool>                      { using type = r_lgl; };
-template<> struct r_scalar_mapping<const char*>               { using type = r_str; };
-template<> struct r_scalar_mapping<std::complex<double>>      { using type = r_cplx; };
-template<> struct r_scalar_mapping<unsigned char>             { using type = r_raw; };
+template<> struct r_scalar_mapping<bool>                            { using type = r_lgl; };
+template<> struct r_scalar_mapping<const char*>                     { using type = r_str; };
+template<> struct r_scalar_mapping<std::complex<double>>            { using type = r_cplx; };
+template<> struct r_scalar_mapping<unsigned char>                   { using type = r_raw; };
 
-template <CppMathType T>
+template <CppNumber T>
 struct r_scalar_mapping<T> {
     using type = 
     std::conditional_t<
         lossless_numeric_cast<T, int>(),
         r_int,
         std::conditional_t<
+            // floating-point, uint64_t and wider-width (e.g. 128-bit) integers map to r_dbl with potential loss in precision.
             lossless_numeric_cast<T, int64_t>(),
             r_int64,
             r_dbl
@@ -424,25 +426,70 @@ struct unwrapped_type<T> {
 template <typename T>
 using unwrap_t = typename internal::unwrapped_type<T>::type;
 
+template <typename T>
+inline constexpr unwrap_t<T> unwrap(const T& x) noexcept {
+  // T must be convertible (implicitly or explicitly) to unwrap_t<T>
+  // unwrap_t<> is a well-defined trait which handles the mapping
+  // It also asserts that it is a non-throwable construction
+  static_assert(std::is_nothrow_constructible_v<unwrap_t<T>, const T&>);
+  return static_cast<unwrap_t<T>>(x);
+}
+
+template <typename T>
+concept HasNASentinel = RScalar<T> || (CppType<T> && CastableToRScalar<T> && is<unwrap_t<as_r_scalar_t<T>>, T>);
+
+// An RScalar that holds an RScalar (e.g. r_date)
+template <typename T>
+concept RNestedScalar = RScalar<T> && RScalar<typename std::remove_cvref_t<T>::value_type>;
+
+namespace internal {
+
+template <typename T>
+struct base_scalar_type {
+    using type = T;
+};
+
+template <RNestedScalar T>
+struct base_scalar_type<T> {
+    using type = typename base_scalar_type<typename T::value_type>::type;
+    static_assert(is<unwrap_t<type>, unwrap_t<T>>, "base scalar changed the storage type");
+};
+
+}
+
+// Get the base RScalar
+template <typename T>
+using r_base_scalar_t = typename internal::base_scalar_type<std::remove_cvref_t<T>>::type;
+
+// Types that are OMP friendly (i.e. they can work safely with OMP simd, reductions and parallel clauses)
+template <typename T>
+concept RVectorisable = RScalar<T> && !is<unwrap_t<T>, SEXP>;
+
 // Rules for determining math type promotion in binary operators
 
 namespace internal {
 
-template <RVal T>
+// TODO
+// On the topic of lists and data frames
+// When r_df gains its own element type, the list should at that point be more generic the data frame
+// and as<r_vec<r_sexp>>(r_df) should produce a list of single rows
+// Currently it does that but only if r_df is 1 col-wide
+// This is relevant for common_r_t<> which currently places r_df as a more generic type than list
+
+template <RScalar T>
 consteval uint8_t r_type_rank() {
 
     // Scalars
     if constexpr (is<T, r_lgl>)                     return 0;
-    if constexpr (is<T, r_int>)                     return 1;
-    if constexpr (is<T, r_int64>)                   return 2;
-    if constexpr (is<T, r_dbl>)                     return 3;
-    if constexpr (is<T, r_cplx>)                    return 4;
-    if constexpr (is<T, r_raw>)                     return 5;
+    if constexpr (is<T, r_raw>)                     return 1;
+    if constexpr (is<T, r_int>)                     return 2;
+    if constexpr (is<T, r_int64>)                   return 3;
+    if constexpr (is<T, r_dbl>)                     return 4;
+    if constexpr (is<T, r_cplx>)                    return 5;
     if constexpr (is<T, r_date>)                    return 6;
     if constexpr (is<T, r_psxct>)                   return 7;
     if constexpr (is<T, r_str>)                     return 8;
     if constexpr (is<T, r_str_view>)                return 9;
-    if constexpr (is<T, r_sexp>)                    return std::numeric_limits<uint8_t>::max() - 1;
 }
 
 template <MathType T, MathType U>
@@ -465,80 +512,67 @@ struct common_r_type_impl<T, T> {
     using type = T;
 };
 
-template <RVal T, RVal U>
+template <RScalar T, RScalar U>
 struct common_r_type_impl<T, U> {
     static constexpr uint8_t rank_t = r_type_rank<T>();
     static constexpr uint8_t rank_u = r_type_rank<U>();
     using type = std::conditional_t<(rank_t >= rank_u), T, U>;
 };
 
-template <RVector T, RVal U>
+template <RAtomicVector T, RScalar U>
 struct common_r_type_impl<T, U> {
     using type = r_vec<typename common_r_type_impl<typename T::data_type, U>::type>;
 };
 
-template <RVal T, RVector U>
+template <RScalar T, RAtomicVector U>
 struct common_r_type_impl<T, U> {
     using type = r_vec<typename common_r_type_impl<T, typename U::data_type>::type>;
 };
 
-template <RVector T, RVector U>
+template <RAtomicVector T, RAtomicVector U>
 struct common_r_type_impl<T, U> {
     using type = r_vec<typename common_r_type_impl<typename T::data_type, typename U::data_type>::type>;
 };
 
-template <RVector T, RFactor U>
+template <RAtomicVector T, RFactor U>
 struct common_r_type_impl<T, U> {
     using type = r_factors;
 };
 
-template <RFactor T, RVector U>
+template <RFactor T, RAtomicVector U>
 struct common_r_type_impl<T, U> {
     using type = r_factors;
 };
 
-template <RVector T, RDataFrame U>
+template <RListVector T, typename U>
+requires (RVector<U> || RFactor<U>)
+struct common_r_type_impl<T, U> {
+    using type = r_vec<r_sexp>;
+};
+
+template <typename T, RListVector U>
+requires (RVector<T> || RFactor<T>)
+struct common_r_type_impl<T, U> {
+    using type = r_vec<r_sexp>;
+};
+
+template <RComposite T, RDataFrame U>
 struct common_r_type_impl<T, U> {
     using type = r_df;
 };
 
-template <RDataFrame T, RVector U>
+template <RDataFrame T, RComposite U>
 struct common_r_type_impl<T, U> {
     using type = r_df;
 };
-
-template <RFactor T, RDataFrame U>
-struct common_r_type_impl<T, U> {
-    using type = r_df;
-};
-
-template <RDataFrame T, RFactor U>
-struct common_r_type_impl<T, U> {
-    using type = r_df;
-};
-
-// Variadic fold: reduces N types by pairwise application of common_r_type_impl.
-// Base case is 1 type (returns itself); recursive case peels two off the front,
-// computes their common type, and folds it back in with the rest.
-template <typename...>
-struct common_r_fold;
 
 template <typename T>
-struct common_r_fold<T> { using type = T; };
+struct type_t { using type = T; };
 
 template <typename T, typename U>
     requires requires { typename common_r_type_impl<T, U>::type; }
-struct common_r_fold<T, U> { using type = typename common_r_type_impl<T, U>::type; };
-
-template <typename T, typename U, typename... Rest>
-    requires requires { typename common_r_type_impl<T, U>::type; }
-struct common_r_fold<T, U, Rest...> {
-    using type = typename common_r_fold<
-        typename common_r_type_impl<T, U>::type,
-        Rest...
-    >::type;
-};
-
+type_t<typename common_r_type_impl<T, U>::type>
+operator->*(type_t<T>, type_t<U>);
 
 }
 
@@ -547,7 +581,7 @@ requires (RMathType<T> || RMathType<U>) // At least one RMathType
 using common_math_t = typename internal::common_r_math_impl<T, U>::type;
 
 template <typename... Ts>
-using common_r_t = typename internal::common_r_fold<Ts...>::type;
+using common_r_t = typename decltype((... ->* internal::type_t<Ts>{}))::type;
 
 }
 

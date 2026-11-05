@@ -1,0 +1,418 @@
+#ifndef CPPALLY_R_FACTOR_H
+#define CPPALLY_R_FACTOR_H
+
+#include <cppally/scalar/r_limits.h>
+#include <cppally/vector/r_vector.h>
+#include <cppally/identical.h>
+#include <cppally/vector/vector_names.h>
+#include <cppally/attributes/attributes.h>
+#include <cppally/stats/range.h>
+
+namespace cppally {
+
+struct r_factors {
+
+  public:
+
+  r_vec<r_int> value;
+  using value_type = r_vec<r_int>;
+  using data_type = r_str; // data_type is tied to return type of `get()`
+
+  explicit operator r_vec<r_int>() const noexcept { return value; }
+
+  private: 
+
+  #ifdef CPPALLY_CHECK_FACTORS
+  static constexpr bool chk_fct_lvls_opt = true;
+  #else
+  static constexpr bool chk_fct_lvls_opt = false;
+  #endif
+
+  // For methods that just return a non-factor (like length())
+  #define FORWARD_METHOD(NAME)                                 \
+      template <typename... Args>                              \
+      requires requires(const r_vec<r_int>& v, Args&&... args) {\
+          v.NAME(std::forward<Args>(args)...);                 \
+      }                                                        \
+      decltype(auto) NAME(Args&&... args) const {              \
+          return value.NAME(std::forward<Args>(args)...);      \
+      }
+
+  #define FORWARD_MUTATING_METHOD(NAME)                    \
+  template <typename... Args>                              \
+  requires requires(r_vec<r_int>& v, Args&&... args) {     \
+      v.NAME(std::forward<Args>(args)...);                 \
+  }                                                        \
+  void NAME(Args&&... args) {                              \
+      value.NAME(std::forward<Args>(args)...);             \
+      sync_levels_cache();                                 \
+  }
+
+  // For methods that return a factor
+  #define FORWARD_FACTOR_METHOD(NAME)                                           \
+      template <typename... Args>                                               \
+      requires requires(const r_vec<r_int>& v, Args&&... args) {                \
+          v.NAME(std::forward<Args>(args)...);                                  \
+      }                                                                         \
+      [[nodiscard]] r_factors NAME(Args&&... args) const {                      \
+          auto cls = attr::get_attr(*this, cached_sym<"class">());              \
+          /* Call the method on the underlying r_vec<r_int> */                  \
+          r_vec<r_int> codes = value.NAME(std::forward<Args>(args)...);         \
+          /* Wrap it in a new r_factors and pass our current levels */          \
+          r_factors out = r_factors(std::move(codes), this->levels(), false);   \
+          attr::set_attr(out, cached_sym<"class">(), cls);                      \
+          return out;                                                           \
+      }
+
+
+  // Shared cache for levels — see r_vec::cached_names for the design
+  mutable internal::names_map::ptr cached_levels;
+
+  // Place names into cache (no hash map yet)
+  void cache_levels(const r_vec<r_str_view>& lvls) const {
+    if (!cached_levels){
+      cached_levels = internal::levels_cache().get_or_create(unwrap(value));
+    }
+    cached_levels->names.emplace(static_cast<r_sexp>(lvls));
+  }
+
+  bool has_cached_levels() const noexcept {
+    return cached_levels && cached_levels->names.has_value();
+  }
+
+  // Cache unless we hold a populated cache
+  void ensure_levels_cached() const {
+    if (has_cached_levels()){
+      return;
+    }
+    cache_levels(r_vec<r_str_view>(Rf_getAttrib(value, cached_sym<"levels">())));
+  }
+
+  void sync_levels_cache() noexcept {
+    #ifdef CPPALLY_COPY_ON_MODIFY
+    if (cached_levels && cached_levels->owner != unwrap(value)) [[unlikely]] {
+      cached_levels.reset();
+    }
+    #endif
+  }
+
+  public:
+
+  r_vec<r_str_view> levels() const {
+    ensure_levels_cached();
+    return r_vec<r_str_view>(*cached_levels->names, internal::no_checks_tag{});
+  }
+
+  // Inherit standard methods from r_vec<>
+
+  FORWARD_METHOD(length)
+  FORWARD_METHOD(is_null)
+  FORWARD_METHOD(is_exclusive)
+  FORWARD_MUTATING_METHOD(maybe_ensure_exclusive)
+  FORWARD_METHOD(data)
+  FORWARD_METHOD(address)
+  FORWARD_METHOD(names)
+  FORWARD_METHOD(has_names)
+  FORWARD_MUTATING_METHOD(set_names)
+  FORWARD_MUTATING_METHOD(clear_names)
+  FORWARD_METHOD(name_index)
+
+  // Methods that return factors
+  FORWARD_FACTOR_METHOD(rep_len)
+  FORWARD_FACTOR_METHOD(resize)
+
+  // Undefine the macros so they don't leak out of the struct
+  #undef FORWARD_METHOD
+  #undef FORWARD_MUTATING_METHOD
+  #undef FORWARD_FACTOR_METHOD
+
+  [[nodiscard]] r_factors copy() const {
+    return r_factors(static_cast<r_sexp>(value.copy()), internal::no_checks_tag{});
+  }
+  
+  r_vec<r_int> codes() const {
+    r_vec<r_int> out(value.length());
+    r_copy_n(out, value, 0, value.length());
+    return out;
+  }
+
+  private:
+
+  template <RStringType T>
+  void validate_levels(const r_vec<r_int>& codes, const r_vec<T>& levels){
+
+    r_vec<r_int> rng = range(codes, /*na_rm = */ true);
+    r_int min_code = rng.get(0);
+    r_int max_code = rng.get(1);
+
+    r_lgl invalid_codes = min_code < 1 || levels.length() < max_code;
+
+    if (invalid_codes.is_true()) [[unlikely]] {
+      abort("Invalid factor codes detected");
+    }
+  }
+
+  void validate_factor(bool check_valid_levels = chk_fct_lvls_opt){
+    if (!attr::inherits1(value, "factor")) [[unlikely]] {
+      abort("SEXP must be of class 'factor' to be constructed as a factor");
+    }
+    if (check_valid_levels){
+      validate_levels(value, levels());
+    }
+  }
+
+  public:
+
+  template <RStringType T>
+  void set_levels(const r_vec<T>& levels, bool check_valid_levels = chk_fct_lvls_opt) {
+    if (check_valid_levels){
+      validate_levels(value, levels);
+    }
+    maybe_ensure_exclusive();
+    safe[Rf_setAttrib](value, cached_sym<"levels">(), levels);
+    cached_levels = internal::levels_cache().get_or_create(static_cast<SEXP>(value));
+    cached_levels->invalidate();
+  }
+  
+  // Direct constructor from integer codes + string levels
+  template <RStringType T>
+  explicit r_factors(r_vec<r_int> codes, const r_vec<T>& levels, bool check_valid_levels = chk_fct_lvls_opt) : value(std::move(codes)){
+      init_factor(levels, check_valid_levels);
+  }
+
+  private:
+
+  template <RStringType T>
+  void init_factor(const r_vec<T>& levels, bool check_valid_levels = chk_fct_lvls_opt) {
+    static r_vec<r_str_view>& fct_class = *new r_vec<r_str_view>({ r_str_view(r_str("factor")) });
+    MARK_NOT_MUTABLE(fct_class);
+    // Set class
+    attr::set_attr(value, cached_sym<"class">(), fct_class);
+    // Set levels
+    set_levels(levels, check_valid_levels);
+  }
+  
+  public:
+
+  // Constructors
+  r_factors() : value() {
+    init_factor(r_vec<r_str_view>(), false);
+  }
+
+  explicit r_factors(r_sexp x, bool check_valid_levels = chk_fct_lvls_opt) : value(std::move(x)) {
+    if (!value.is_null()){
+      validate_factor(check_valid_levels);
+    }
+  }
+
+  explicit r_factors(SEXP x, bool check_valid_levels = chk_fct_lvls_opt) : r_factors(r_sexp(x), check_valid_levels) {}
+  explicit r_factors(SEXP x, internal::view_tag, bool check_valid_levels = chk_fct_lvls_opt) : r_factors(r_sexp(x, internal::view_tag{}), check_valid_levels) {}
+
+  // Unchecked constructors, for use where the SEXP is already known to be a factor
+  explicit r_factors(r_sexp x, internal::no_checks_tag) : value(std::move(x), internal::no_checks_tag{}) {}
+  explicit r_factors(SEXP x, internal::view_tag, internal::no_checks_tag) : value(x, internal::view_tag{}, internal::no_checks_tag{}) {}
+
+  explicit r_factors(r_size_t n): value(n, na<r_int>()){
+    init_factor(r_vec<r_str_view>(), false);
+  }
+
+
+  // Defined in r_unique.h
+  template <RVector T>
+  explicit r_factors(const T& x);
+
+  template <RStringType T>
+  explicit r_factors(const r_vec<T>& x, const r_vec<T>& levels) : value(x.length(), na<r_int>()) {
+    // Initialise empty factor with specified levels
+    init_factor(levels, false);
+
+    r_size_t n = x.length();
+    for (r_size_t i = 0; i < n; ++i){
+      value.set(i, get_code(x.view(i)));
+    }
+  }
+
+  // Defined in r_match.h
+  template <RVector T>
+  requires (!RStringType<typename T::data_type>)
+  explicit r_factors(const T& x, const T& levels);
+
+  operator SEXP() const noexcept { return static_cast<SEXP>(value); }
+  explicit operator r_sexp() const noexcept { return static_cast<r_sexp>(value); }
+
+  // Find factor code associated with factor string
+  // Since levels are assumed to be unique, we find the first match
+  r_int get_code(r_str_view val, r_int no_match = na<r_int>()) const {
+    
+    ensure_levels_cached();
+
+    if (cached_levels->accessed) {
+      r_int out = cached_levels->find(val, /*offset = */ 1);
+      return is_na(out) ? no_match : out;
+    }
+
+    cached_levels->accessed = true;
+
+    // First lookup: linear scan over the levels STRSXP.
+    r_vec<r_str_view> levels_attr = levels();
+    r_int out = internal::coerce_number<r_int>(levels_attr.find_first(val)) + r_int(1);
+    return is_na(out) ? no_match : out;
+  }
+
+  r_int get_code(const char* val, r_int no_match = na<r_int>()) const {
+    return get_code(r_str(val), no_match);
+  }
+
+  r_int get_code(r_size_t index) const {
+    return value.get(index);
+  }
+
+  void set_code(r_size_t index, r_int val) {
+    value.set(index, val);
+    sync_levels_cache();
+  }
+
+  template <typename I>
+  requires requires(const I& idx){ value.get(idx); }
+  r_str get(const I& index) const {
+    r_int code = value.get(index);
+    if (is_na(code)){
+      return na<r_str>();
+    }
+    return r_str(levels().get(unwrap(code) - 1));
+  }
+
+  template <typename I>
+  requires requires(const I& idx){ value.view(idx); }
+  r_str_view view(const I& index) const {
+    r_int code = value.get(index);
+    if (is_na(code)){
+      return na<r_str_view>();
+    }
+    return levels().view(unwrap(code) - 1);
+  }
+
+  template <typename I>
+  requires requires(const I& idx){ value.set(idx, r_int{}); }
+  void set(const I& index, r_str_view val) {
+    value.set(index, get_code(val));
+    sync_levels_cache();
+  }
+
+  // Re-express this factor's values against a new set of levels
+  template <RStringType U>
+  [[nodiscard]] r_factors refactor(const r_vec<U>& new_levels) const {
+
+    if (identical(new_levels, levels())){
+      return *this;
+    }
+
+    // Empty codes — we only need the temp's levels for lookup
+    r_factors new_lvls_fct(r_vec<r_int>(), new_levels);
+
+    // For each of this factor's levels, find its position in new_levels
+    r_vec<r_str_view> lvls = levels();
+    r_size_t n_lvls = lvls.length();
+    r_vec<r_int> remap(n_lvls);
+
+    for (r_size_t i = 0; i < n_lvls; ++i){
+      remap.set(i, new_lvls_fct.get_code(lvls.view(i)));
+    }
+
+    r_size_t n = length();
+    r_vec<r_int> out(n);
+    for (r_size_t i = 0; i < n; ++i){
+      r_int c = value.get(i);
+      // Legit NA codes always stay NA — only unmapped levels use the sentinel
+      out.set(i, is_na(c) ? na<r_int>() : remap.get(unwrap(c) - 1));
+    }
+    return r_factors(std::move(out), new_levels, false);
+  }
+
+  template <RStringType U>
+  void recode(const r_vec<U>& new_levels) {
+    *this = refactor(new_levels);
+  }
+
+  r_size_t count(r_str_view val) const {
+    if (is_na(val)){
+      return value.na_count();
+    } else {
+      r_int code = get_code(val);
+      if (is_na(code)){
+        return 0;
+      } else {
+        return value.count(code);
+      }
+    }
+  }
+
+  void fill(r_size_t start, r_size_t n, r_str_view val){
+    value.fill(start, n, is_na(val) ? na<r_int>() : get_code(val));
+    sync_levels_cache();
+  }
+
+  void fill(r_str_view val){
+    fill(0, value.length(), val);
+  }
+
+  r_vec<r_int> find(r_str_view val, bool invert = false) const {
+    if (is_na(val)){
+      return value.find(na<r_int>(), invert);
+    }
+    r_int code = get_code(val);
+    if (is_na(code)){
+      if (invert){
+        r_vec<r_int> out(value.length());
+        out.iota();
+        return out;
+      } else {
+        return r_vec<r_int>();
+      }
+    }
+    return value.find(code, invert);
+  }
+
+  void replace(r_size_t start, r_size_t n, r_str_view old_val, r_str_view new_val){
+
+    r_int old_code = get_code(old_val);
+    r_int new_code = get_code(new_val);
+
+    bool valid_old_code = is_na(old_val) == is_na(old_code);
+    bool valid_new_code = is_na(new_val) == is_na(new_code);
+
+    if (!valid_old_code || !valid_new_code){
+      return;
+    }
+
+    for (r_size_t i = 0; i < n; ++i) {
+      r_size_t idx = start + i;
+      if (identical(value.get(idx), old_code)){
+        value.set(idx, new_code);
+      }
+    }
+    sync_levels_cache();
+  }
+  
+  void replace(r_str_view old_val, r_str_view new_val){
+    replace(0, value.length(), old_val, new_val);
+  }
+
+  [[nodiscard]] r_factors remove(r_str_view val) const {
+    if (is_na(val)){
+      r_vec<r_int> fct_codes = value.remove(na<r_int>());
+      return r_factors(std::move(fct_codes), this->levels(), false);
+    }
+    r_int code = get_code(val);
+    if (is_na(code)){
+      return *this;
+    }
+    r_vec<r_int> fct_codes = value.remove(code);
+    return r_factors(std::move(fct_codes), this->levels(), false);
+  }
+
+};
+
+}
+
+#endif

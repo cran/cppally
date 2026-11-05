@@ -7,9 +7,8 @@ knitr::opts_chunk$set(
 ## ----include = FALSE----------------------------------------------------------
 required <- c("bench", "brio", "callr", "cli", "cpp11",
               "decor", "desc", "glue", "purrr", "readr",
-              "stringr", "utils", "vctrs", "withr")
+              "stringr", "usethis", "utils", "vctrs", "withr")
 if (!all(vapply(required, requireNamespace, logical(1), quietly = TRUE))) {
-  knitr::opts_chunk$set(eval = FALSE)
   knitr::knit_exit()
 }
 
@@ -17,10 +16,23 @@ if (!all(vapply(required, requireNamespace, logical(1), quietly = TRUE))) {
 library(cppally)
 
 ## ----include=FALSE------------------------------------------------------------
+not_cran <- function(){
+ nzchar(Sys.getenv("CI")) || identical(Sys.getenv("NOT_CRAN"), "true") 
+}
 cpp_source <- function(..., code, debug = FALSE, env = parent.frame()){
   preamble <- c("#include <cppally.hpp>", "using namespace cppally;")
   code <- paste(c(preamble, code), collapse = "\n")
-  cppally::cpp_source(debug = debug, env = env, code = code, ...)
+  tryCatch(
+    cppally::cpp_source(
+      debug = debug, env = env, code = code, ...), 
+    error = function(e) {
+      
+      if (not_cran()){
+        stop(e)
+      }
+      knitr::knit_exit()
+    }
+  )
 }
 chunk_impl <- function(x, language){
   paste0("```", language, "\n", x, "\n```\n")
@@ -197,27 +209,8 @@ int cpp11_na_count(SEXP x){
 '
 )
 
-# Display-only snippets (no [[cppally::register]] tag, so not exposed to R).
-# Compiled in their own batch since they are illustrative rather than benchmarked.
-display_only <- c(
-  view_good = '
-bool good(r_str x){
-  r_str_view str = x;
-  return is_na(str); // str only used for temporary read-only context
-}
-',
-  view_bad = '
-r_str_view bad(){
-  r_str new_str("I will be destroyed at the end of `bad()`");
-  r_str_view bad_str = new_str; // A view of new_str
-  return bad_str; // Points to underlying CHARSXP but nothing protecting it
-}
-'
-)
-
 cpp_source(code = paste(examples, collapse = "\n"))
 cpp_source(code = paste(cpp11_examples, collapse = "\n"))
-cpp_source(code = paste(display_only, collapse = "\n"))
 
 ## -----------------------------------------------------------------------------
 library(cppally)
@@ -277,10 +270,4 @@ as_cpp_chunk(examples[["cppally_fast_na_count_v2"]])
 
 ## -----------------------------------------------------------------------------
 mark(cppally_fast_na_count_v2(x))
-
-## ----echo=FALSE, comment="", results='asis'-----------------------------------
-as_cpp_chunk(display_only[["view_good"]])
-
-## ----echo=FALSE, comment="", results='asis'-----------------------------------
-as_cpp_chunk(display_only[["view_bad"]])
 

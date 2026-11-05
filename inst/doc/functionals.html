@@ -344,290 +344,672 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <p>This vignette is mainly a gallery of examples, serving to provide
 intuition behind the usage of cppally functionals, as well as showcasing
 their utility.</p>
+<div id="a-note-on-writing-code-in-c-versus-r" class="section level3">
+<h3>A note on writing code in C++ versus R</h3>
+<p>Working with scalars demands a different mental model to the one R
+typically encourages.</p>
+<p>In R we usually vectorise everything upfront by using vectors and
+vectorised operations everywhere possible. For R this is both cleaner
+and more efficient. In C++ the reverse is true. It is arguably cleaner
+to write functions at the scalar level, and then <strong>vectorise after
+the fact</strong>.</p>
+<p>As will soon be demonstrated in this vignette, <code>pmap()</code>
+exists to bridge that final step of taking <strong>scalar-based</strong>
+functions and vectorising<a href="#fn1" class="footnote-ref" id="fnref1"><sup>1</sup></a> them.</p>
 <p>Let’s load cppally in R and include cppally in our cpp or header file
-to get started</p>
+to get started.</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(cppally)</span></code></pre></div>
-<div class="sourceCode" id="cb2"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;cppally.hpp&gt;</span></span>
-<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="kw">using</span> <span class="kw">namespace</span> cppally<span class="op">;</span></span></code></pre></div>
-<div id="reduce" class="section level3">
-<h3>reduce</h3>
-<p><code>r_vec::reduce()</code> is a left-fold reduction functional that
-successively applies a binary function along the elements of the vector
-(from left-to-right). It allows for returning early and explicitly
-continuing by calling <code>done()</code> and <code>keep()</code>. The
-input function is typically a lambda, but can also be a callable (struct
-with <code>operator()</code>).</p>
-<p>Example of summing a vector with <code>reduce</code></p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a></span>
-<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>r_dbl cpp_sum<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">([](</span><span class="kw">auto</span> a<span class="op">,</span> <span class="kw">auto</span> b<span class="op">){</span> <span class="cf">return</span> a <span class="op">+</span> b<span class="op">;</span> <span class="op">});</span></span>
-<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="fu">cpp_sum</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>)</span>
-<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a><span class="co">#&gt; [1] 55</span></span></code></pre></div>
-<p>We could have also passed the callable
-<code>std::plus&lt;&gt;{}</code>, which makes it even more readable</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a></span>
-<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a>r_dbl cpp_sum2<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">(</span><span class="bu">std::</span>plus<span class="op">&lt;&gt;{});</span></span>
-<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="fu">cpp_sum2</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>)</span>
-<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a><span class="co">#&gt; [1] 55</span></span></code></pre></div>
-<p>To perform a reduction until a condition is met, use the helpers
-<code>done()</code> and <code>keep()</code></p>
-<p><strong>Example:</strong> Check vector has any <code>NA</code> or all
-<code>NA</code></p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a></span>
-<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a><span class="dt">bool</span> cpp_any_na<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">([](</span><span class="kw">auto</span><span class="op">,</span> <span class="kw">auto</span> curr<span class="op">){</span> <span class="cf">return</span> is_na<span class="op">(</span>curr<span class="op">)</span> <span class="op">?</span> done<span class="op">(</span><span class="kw">true</span><span class="op">)</span> <span class="op">:</span> keep<span class="op">(</span><span class="kw">false</span><span class="op">);</span> <span class="op">},</span> <span class="co">/*init = */</span> <span class="kw">false</span><span class="op">);</span></span>
-<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a></span>
-<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="dt">bool</span> cpp_all_na<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">([](</span><span class="kw">auto</span><span class="op">,</span> <span class="kw">auto</span> curr<span class="op">){</span> <span class="cf">return</span> is_na<span class="op">(</span>curr<span class="op">)</span> <span class="op">?</span> keep<span class="op">(</span><span class="kw">true</span><span class="op">)</span> <span class="op">:</span> done<span class="op">(</span><span class="kw">false</span><span class="op">);</span> <span class="op">},</span> <span class="co">/*init = */</span> <span class="kw">true</span><span class="op">);</span></span>
-<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a>  </span></code></pre></div>
-<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">2</span>, <span class="cn">NA</span>, <span class="dv">4</span>, <span class="dv">5</span>)</span>
-<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="fu">cpp_any_na</span>(x)</span>
-<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a><span class="co">#&gt; [1] TRUE</span></span>
-<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a><span class="fu">cpp_all_na</span>(x)</span>
-<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a><span class="co">#&gt; [1] FALSE</span></span></code></pre></div>
-<p>Notice that the two folds are identical - only
-<code>done</code>/<code>keep</code> and <code>init</code> are swapped.
-This is the general pattern for any/all-style predicates.</p>
-<p><strong>Example:</strong> greatest-common-divisor across integer
-vector. The trick here is to break when the result is 1 as
-<code>gcd(1, x) = 1</code> for any x</p>
-<div class="sourceCode" id="cb9"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a></span>
-<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a>r_int cpp_gcd<span class="op">(</span>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">([](</span><span class="kw">auto</span> acc<span class="op">,</span> <span class="kw">auto</span> curr<span class="op">){</span></span>
-<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a>        <span class="kw">auto</span> res <span class="op">=</span> cppally<span class="op">::</span>gcd<span class="op">(</span>acc<span class="op">,</span> curr<span class="op">);</span> <span class="co">// cppally has its own NA-aware gcd</span></span>
-<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span> <span class="op">(</span>res <span class="op">==</span> <span class="dv">1</span><span class="op">).</span>is_true<span class="op">()</span> <span class="op">){</span></span>
-<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a>            <span class="cf">return</span> done<span class="op">(</span>res<span class="op">);</span></span>
-<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
-<span id="cb9-9"><a href="#cb9-9" tabindex="-1"></a>            <span class="cf">return</span> keep<span class="op">(</span>res<span class="op">);</span></span>
-<span id="cb9-10"><a href="#cb9-10" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb9-11"><a href="#cb9-11" tabindex="-1"></a>    <span class="op">});</span></span>
-<span id="cb9-12"><a href="#cb9-12" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb9-13"><a href="#cb9-13" tabindex="-1"></a>  </span></code></pre></div>
-<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a><span class="fu">cpp_gcd</span>(<span class="fu">c</span>(<span class="dv">5</span><span class="dt">L</span>, <span class="dv">25</span><span class="dt">L</span>, <span class="dv">125</span><span class="dt">L</span>))</span>
-<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a><span class="co">#&gt; [1] 5</span></span>
-<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="fu">cpp_gcd</span>(<span class="fu">c</span>(<span class="dv">5</span><span class="dt">L</span>, <span class="dv">25</span><span class="dt">L</span>, <span class="dv">1</span><span class="dt">L</span>, <span class="dv">125</span><span class="dt">L</span>))</span>
-<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="co">#&gt; [1] 1</span></span></code></pre></div>
-<p>Use <code>cumulative_reduce</code> to return a vector of all the
-intermediate results of the reduction</p>
-<div class="sourceCode" id="cb11"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a></span>
-<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_cumsum<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>cumulative_reduce<span class="op">(</span><span class="bu">std::</span>plus<span class="op">&lt;&gt;{});</span></span>
-<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a>  </span></code></pre></div>
-<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a><span class="fu">cpp_cumsum</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>)</span>
-<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a><span class="co">#&gt;  [1]  1  3  6 10 15 21 28 36 45 55</span></span></code></pre></div>
+<div class="sourceCode" id="cb2"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="co">// Include this if you are copying the code example-by-example</span></span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;cppally.hpp&gt;</span></span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a><span class="kw">using</span> <span class="kw">namespace</span> cppally<span class="op">;</span></span></code></pre></div>
 </div>
 <div id="pmap" class="section level3">
 <h3>pmap</h3>
 <p><code>pmap</code> is a C++ variadic function that allows one to apply
 a function across corresponding elements of multiple vectors.</p>
 <p><strong>Example:</strong> vectorised binary max</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a></span>
-<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_pmax<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> y<span class="op">){</span></span>
-<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a>    <span class="cf">return</span> pmap<span class="op">([](</span><span class="kw">auto</span> a<span class="op">,</span> <span class="kw">auto</span> b<span class="op">){</span></span>
-<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a>        <span class="cf">return</span> max<span class="op">(</span>a<span class="op">,</span> b<span class="op">);</span></span>
-<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a>    <span class="op">},</span> x<span class="op">,</span> y<span class="op">);</span></span>
-<span id="cb13-7"><a href="#cb13-7" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb13-8"><a href="#cb13-8" tabindex="-1"></a>  </span></code></pre></div>
-<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>)</span>
-<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a>y <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">50</span>, <span class="dv">0</span>)</span>
-<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a><span class="fu">cpp_pmax</span>(x, y)</span>
-<span id="cb14-4"><a href="#cb14-4" tabindex="-1"></a><span class="co">#&gt; [1] 10 50 30</span></span>
-<span id="cb14-5"><a href="#cb14-5" tabindex="-1"></a></span>
-<span id="cb14-6"><a href="#cb14-6" tabindex="-1"></a><span class="co"># pmap also recycles vectors</span></span>
-<span id="cb14-7"><a href="#cb14-7" tabindex="-1"></a></span>
-<span id="cb14-8"><a href="#cb14-8" tabindex="-1"></a><span class="fu">cpp_pmax</span>(x, <span class="dv">15</span>)</span>
-<span id="cb14-9"><a href="#cb14-9" tabindex="-1"></a><span class="co">#&gt; [1] 15 20 30</span></span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a></span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_pmax<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> y<span class="op">){</span></span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>    <span class="cf">return</span> pmap<span class="op">(</span></span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>    </span>
+<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a>    <span class="co">/* fn = */</span> <span class="op">[](</span><span class="kw">auto</span> a<span class="op">,</span> <span class="kw">auto</span> b<span class="op">){</span></span>
+<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a>    </span>
+<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a>      <span class="co">/* expr = */</span> <span class="cf">return</span> max<span class="op">(</span>a<span class="op">,</span> b<span class="op">);</span></span>
+<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a>        </span>
+<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a>    <span class="op">},</span> </span>
+<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a>    </span>
+<span id="cb3-12"><a href="#cb3-12" tabindex="-1"></a>    <span class="co">/* vectors = */</span> x<span class="op">,</span> y</span>
+<span id="cb3-13"><a href="#cb3-13" tabindex="-1"></a>  <span class="op">);</span></span>
+<span id="cb3-14"><a href="#cb3-14" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb3-15"><a href="#cb3-15" tabindex="-1"></a>  </span></code></pre></div>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>y <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">50</span>, <span class="dv">0</span>)</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a><span class="fu">cpp_pmax</span>(x, y)</span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a><span class="co">#&gt; [1] 10 50 30</span></span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a></span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a><span class="co"># pmap also recycles vectors</span></span>
+<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a></span>
+<span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a><span class="fu">cpp_pmax</span>(x, <span class="dv">15</span>)</span>
+<span id="cb4-9"><a href="#cb4-9" tabindex="-1"></a><span class="co">#&gt; [1] 15 20 30</span></span></code></pre></div>
 <p><strong>Example:</strong> vectorised if else</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a></span>
-<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span>RVector T<span class="op">&gt;</span></span>
-<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a>T cpp_if_else<span class="op">(</span>r_vec<span class="op">&lt;</span>r_lgl<span class="op">&gt;</span> condition<span class="op">,</span> T if_true<span class="op">,</span> T if_false<span class="op">,</span> T if_na<span class="op">){</span></span>
-<span id="cb15-5"><a href="#cb15-5" tabindex="-1"></a>    <span class="cf">return</span> pmap<span class="op">([](</span>r_lgl <span class="va">condition_</span><span class="op">,</span> <span class="kw">auto</span> yes<span class="op">,</span> <span class="kw">auto</span> no<span class="op">,</span> <span class="kw">auto</span> missing<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb15-6"><a href="#cb15-6" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span><span class="va">condition_</span><span class="op">.</span>is_true<span class="op">()){</span></span>
-<span id="cb15-7"><a href="#cb15-7" tabindex="-1"></a>            <span class="cf">return</span> yes<span class="op">;</span></span>
-<span id="cb15-8"><a href="#cb15-8" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="cf">if</span> <span class="op">(</span><span class="va">condition_</span><span class="op">.</span>is_false<span class="op">()){</span></span>
-<span id="cb15-9"><a href="#cb15-9" tabindex="-1"></a>            <span class="cf">return</span> no<span class="op">;</span></span>
-<span id="cb15-10"><a href="#cb15-10" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
-<span id="cb15-11"><a href="#cb15-11" tabindex="-1"></a>            <span class="cf">return</span> missing<span class="op">;</span></span>
-<span id="cb15-12"><a href="#cb15-12" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb15-13"><a href="#cb15-13" tabindex="-1"></a>    <span class="op">},</span> condition<span class="op">,</span> if_true<span class="op">,</span> if_false<span class="op">,</span> if_na<span class="op">);</span></span>
-<span id="cb15-14"><a href="#cb15-14" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a><span class="fu">cpp_if_else</span>(<span class="fu">c</span>(<span class="cn">TRUE</span>, <span class="cn">FALSE</span>, <span class="cn">NA</span>), <span class="st">&quot;yes&quot;</span>, <span class="st">&quot;no&quot;</span>, <span class="st">&quot;missing&quot;</span>)</span>
-<span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a><span class="co">#&gt; [1] &quot;yes&quot;     &quot;no&quot;      &quot;missing&quot;</span></span></code></pre></div>
+<div class="sourceCode" id="cb5"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a></span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span>RVector T<span class="op">&gt;</span></span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a>T cpp_if_else<span class="op">(</span>r_vector<span class="op">&lt;</span>r_lgl<span class="op">&gt;</span> condition<span class="op">,</span> T if_true<span class="op">,</span> T if_false<span class="op">,</span> T if_na<span class="op">){</span></span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>    <span class="cf">return</span> pmap<span class="op">(</span></span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a>      <span class="op">[](</span>r_lgl <span class="va">condition_</span><span class="op">,</span> <span class="kw">auto</span> yes<span class="op">,</span> <span class="kw">auto</span> no<span class="op">,</span> <span class="kw">auto</span> missing<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span><span class="va">condition_</span><span class="op">.</span>is_true<span class="op">()){</span></span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a>            <span class="cf">return</span> yes<span class="op">;</span></span>
+<span id="cb5-9"><a href="#cb5-9" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="cf">if</span> <span class="op">(</span><span class="va">condition_</span><span class="op">.</span>is_false<span class="op">()){</span></span>
+<span id="cb5-10"><a href="#cb5-10" tabindex="-1"></a>            <span class="cf">return</span> no<span class="op">;</span></span>
+<span id="cb5-11"><a href="#cb5-11" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb5-12"><a href="#cb5-12" tabindex="-1"></a>            <span class="cf">return</span> missing<span class="op">;</span></span>
+<span id="cb5-13"><a href="#cb5-13" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb5-14"><a href="#cb5-14" tabindex="-1"></a>    <span class="op">},</span> </span>
+<span id="cb5-15"><a href="#cb5-15" tabindex="-1"></a>    </span>
+<span id="cb5-16"><a href="#cb5-16" tabindex="-1"></a>    condition<span class="op">,</span> if_true<span class="op">,</span> if_false<span class="op">,</span> if_na</span>
+<span id="cb5-17"><a href="#cb5-17" tabindex="-1"></a>  <span class="op">);</span></span>
+<span id="cb5-18"><a href="#cb5-18" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="fu">cpp_if_else</span>(<span class="fu">c</span>(<span class="cn">TRUE</span>, <span class="cn">FALSE</span>, <span class="cn">NA</span>), <span class="st">&quot;yes&quot;</span>, <span class="st">&quot;no&quot;</span>, <span class="st">&quot;missing&quot;</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a><span class="co">#&gt; [1] &quot;yes&quot;     &quot;no&quot;      &quot;missing&quot;</span></span></code></pre></div>
 <p><code>pmap_with_index()</code> is a variant that allows one to
 capture the index as we iterate along the vector</p>
 <p><strong>Example:</strong> Integer sequence along vector</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a></span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span>RVector T<span class="op">&gt;</span></span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> cpp_seq_along<span class="op">(</span>T x<span class="op">){</span></span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>    <span class="cf">return</span> pmap_with_index<span class="op">([](</span><span class="dt">r_size_t</span> i<span class="op">,</span> <span class="kw">auto</span><span class="op">){</span> <span class="co">// 2nd arg included so function can compile</span></span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a>        <span class="cf">return</span> as<span class="op">&lt;</span>r_int<span class="op">&gt;(</span>i<span class="op">)</span> <span class="op">+</span> <span class="dv">1</span><span class="op">;</span> <span class="co">// R is 1-indexed</span></span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a>    <span class="op">},</span> x<span class="op">);</span></span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a><span class="fu">cpp_seq_along</span>(letters)</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="co">#&gt;  [1]  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25</span></span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a><span class="co">#&gt; [26] 26</span></span></code></pre></div>
+</div>
+<div id="reduce" class="section level3">
+<h3>reduce</h3>
+<p><code>r_vector::reduce()</code> is a left-fold reduction functional
+that successively applies a binary function along the elements of the
+vector (from left-to-right). It allows for returning early and
+explicitly continuing by calling <code>done()</code> and
+<code>keep()</code>. The input function is typically a lambda, but can
+also be a callable (struct with <code>operator()</code>).</p>
+<p>Example of summing a vector with <code>reduce</code></p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a></span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a>r_dbl cpp_sum<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">([](</span><span class="kw">auto</span> a<span class="op">,</span> <span class="kw">auto</span> b<span class="op">){</span> <span class="cf">return</span> a <span class="op">+</span> b<span class="op">;</span> <span class="op">});</span></span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a><span class="fu">cpp_sum</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>)</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a><span class="co">#&gt; [1] 55</span></span></code></pre></div>
+<p>We could have also passed the callable
+<code>std::plus&lt;&gt;{}</code>, which makes it even more readable.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a></span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>r_dbl cpp_sum2<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">(</span><span class="bu">std::</span>plus<span class="op">&lt;&gt;{});</span></span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a><span class="fu">cpp_sum2</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>)</span>
+<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a><span class="co">#&gt; [1] 55</span></span></code></pre></div>
+<p>Use <code>cumulative_reduce</code> to return a vector of all the
+intermediate results of the reduction.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a></span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_cumsum<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>cumulative_reduce<span class="op">(</span><span class="bu">std::</span>plus<span class="op">&lt;&gt;{});</span></span>
+<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a>  </span></code></pre></div>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="fu">cpp_cumsum</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>)</span>
+<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a><span class="co">#&gt;  [1]  1  3  6 10 15 21 28 36 45 55</span></span></code></pre></div>
+<p>While the above examples are useful for showing how to write a sum by
+hand, cppally provides <code>sum()</code> for free.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a></span>
+<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a>r_dbl cpp_sum3<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a>    <span class="cf">return</span> sum<span class="op">(</span>x<span class="op">);</span></span>
+<span id="cb15-5"><a href="#cb15-5" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a><span class="fu">cpp_sum3</span>(<span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>))</span>
+<span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a><span class="co">#&gt; [1] 60</span></span></code></pre></div>
+<div id="returning-early" class="section level4">
+<h4>Returning early</h4>
+<p>To perform a reduction until a condition is met, use the helpers
+<code>done()</code> and <code>keep()</code></p>
+<p><strong>Example:</strong> Check vector has any <code>NA</code> or all
+<code>NA</code></p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a></span>
-<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span>RVector T<span class="op">&gt;</span></span>
-<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> cpp_seq_along<span class="op">(</span>T x<span class="op">){</span></span>
-<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a>    <span class="cf">return</span> pmap_with_index<span class="op">([](</span><span class="dt">int</span> i<span class="op">,</span> <span class="kw">auto</span><span class="op">){</span> <span class="co">// 2nd arg included so function can compile</span></span>
-<span id="cb17-6"><a href="#cb17-6" tabindex="-1"></a>        <span class="cf">return</span> r_int<span class="op">(</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">);</span> <span class="co">// R is 1-indexed</span></span>
-<span id="cb17-7"><a href="#cb17-7" tabindex="-1"></a>    <span class="op">},</span> x<span class="op">);</span></span>
-<span id="cb17-8"><a href="#cb17-8" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a><span class="fu">cpp_seq_along</span>(letters)</span>
-<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a><span class="co">#&gt;  [1]  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25</span></span>
-<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a><span class="co">#&gt; [26] 26</span></span></code></pre></div>
+<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a><span class="dt">bool</span> cpp_any_na<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">([](</span><span class="kw">auto</span><span class="op">,</span> <span class="kw">auto</span> curr<span class="op">){</span> <span class="cf">return</span> is_na<span class="op">(</span>curr<span class="op">)</span> <span class="op">?</span> done<span class="op">(</span><span class="kw">true</span><span class="op">)</span> <span class="op">:</span> keep<span class="op">(</span><span class="kw">false</span><span class="op">);</span> <span class="op">},</span> <span class="co">/*init = */</span> <span class="kw">false</span><span class="op">);</span></span>
+<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb17-6"><a href="#cb17-6" tabindex="-1"></a></span>
+<span id="cb17-7"><a href="#cb17-7" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb17-8"><a href="#cb17-8" tabindex="-1"></a><span class="dt">bool</span> cpp_all_na<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb17-9"><a href="#cb17-9" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">([](</span><span class="kw">auto</span><span class="op">,</span> <span class="kw">auto</span> curr<span class="op">){</span> <span class="cf">return</span> is_na<span class="op">(</span>curr<span class="op">)</span> <span class="op">?</span> keep<span class="op">(</span><span class="kw">true</span><span class="op">)</span> <span class="op">:</span> done<span class="op">(</span><span class="kw">false</span><span class="op">);</span> <span class="op">},</span> <span class="co">/*init = */</span> <span class="kw">true</span><span class="op">);</span></span>
+<span id="cb17-10"><a href="#cb17-10" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb17-11"><a href="#cb17-11" tabindex="-1"></a>  </span></code></pre></div>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">2</span>, <span class="cn">NA</span>, <span class="dv">4</span>, <span class="dv">5</span>)</span>
+<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a><span class="fu">cpp_any_na</span>(x)</span>
+<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a><span class="co">#&gt; [1] TRUE</span></span>
+<span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a><span class="fu">cpp_all_na</span>(x)</span>
+<span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a><span class="co">#&gt; [1] FALSE</span></span></code></pre></div>
+<p>Notice that the two folds are identical - only
+<code>done</code>/<code>keep</code> and <code>init</code> are swapped.
+This is the general pattern for any/all-style predicates.</p>
+<p><strong>Example:</strong> greatest-common-divisor across integer
+vector. The trick here is to break when the result is 1 as
+<code>gcd(1, x) = 1</code> for any x.</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a></span>
+<span id="cb19-2"><a href="#cb19-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb19-3"><a href="#cb19-3" tabindex="-1"></a>r_int cpp_gcd<span class="op">(</span>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb19-4"><a href="#cb19-4" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">.</span>reduce<span class="op">([](</span><span class="kw">auto</span> acc<span class="op">,</span> <span class="kw">auto</span> curr<span class="op">){</span></span>
+<span id="cb19-5"><a href="#cb19-5" tabindex="-1"></a>    </span>
+<span id="cb19-6"><a href="#cb19-6" tabindex="-1"></a>        <span class="kw">auto</span> res <span class="op">=</span> cppally<span class="op">::</span>gcd<span class="op">(</span>acc<span class="op">,</span> curr<span class="op">);</span> <span class="co">// cppally has its own NA-aware gcd</span></span>
+<span id="cb19-7"><a href="#cb19-7" tabindex="-1"></a>        </span>
+<span id="cb19-8"><a href="#cb19-8" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span> <span class="op">(</span>res <span class="op">==</span> <span class="dv">1</span><span class="op">).</span>is_true<span class="op">()</span> <span class="op">){</span></span>
+<span id="cb19-9"><a href="#cb19-9" tabindex="-1"></a>            <span class="cf">return</span> done<span class="op">(</span>res<span class="op">);</span></span>
+<span id="cb19-10"><a href="#cb19-10" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb19-11"><a href="#cb19-11" tabindex="-1"></a>            <span class="cf">return</span> keep<span class="op">(</span>res<span class="op">);</span></span>
+<span id="cb19-12"><a href="#cb19-12" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb19-13"><a href="#cb19-13" tabindex="-1"></a>        </span>
+<span id="cb19-14"><a href="#cb19-14" tabindex="-1"></a>    <span class="op">});</span></span>
+<span id="cb19-15"><a href="#cb19-15" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb19-16"><a href="#cb19-16" tabindex="-1"></a>  </span></code></pre></div>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a><span class="fu">cpp_gcd</span>(<span class="fu">c</span>(<span class="dv">5</span><span class="dt">L</span>, <span class="dv">25</span><span class="dt">L</span>, <span class="dv">125</span><span class="dt">L</span>))</span>
+<span id="cb20-2"><a href="#cb20-2" tabindex="-1"></a><span class="co">#&gt; [1] 5</span></span>
+<span id="cb20-3"><a href="#cb20-3" tabindex="-1"></a><span class="fu">cpp_gcd</span>(<span class="fu">c</span>(<span class="dv">5</span><span class="dt">L</span>, <span class="dv">25</span><span class="dt">L</span>, <span class="dv">1</span><span class="dt">L</span>, <span class="dv">125</span><span class="dt">L</span>))</span>
+<span id="cb20-4"><a href="#cb20-4" tabindex="-1"></a><span class="co">#&gt; [1] 1</span></span></code></pre></div>
+</div>
+</div>
+<div id="other-pmap-helpers" class="section level3">
+<h3>Other pmap helpers</h3>
+<p>There are 2 core pmap functionals, with 9 variants in total.</p>
+<p><strong>Core pmap functionals</strong></p>
+<ul>
+<li><p><code>pmap</code> - Applies a function across elements.</p></li>
+<li><p><code>pmap_with_index</code> - Like <code>pmap</code> but the
+first argument of the lambda must be an index.</p></li>
+</ul>
+<p><strong>Other pmap variants</strong></p>
+<ul>
+<li><p><code>pmap_parallel</code> - Like <code>pmap</code> but executed
+using multiple threads</p></li>
+<li><p><code>pmap_simd</code> - Like <code>pmap</code> but executed
+under OpenMP SIMD instructions</p></li>
+<li><p><code>pmap_parallel_simd</code> - Like <code>pmap</code> but
+multi-threaded and executed under OpenMP SIMD instructions</p></li>
+<li><p><code>pmap_parallel_with_index</code> - Like
+<code>pmap_with_index</code> but executed using multiple
+threads</p></li>
+<li><p><code>pmap_simd_with_index</code> - Like
+<code>pmap_with_index</code> but executed under OpenMP SIMD
+instructions</p></li>
+<li><p><code>pmap_parallel_simd_with_index</code> - Like
+<code>pmap_with_index</code> but executed using multiple threads and
+under OpenMP SIMD instructions</p></li>
+<li><p><code>pmap_with_shift</code> - A convenient wrapper around
+<code>pmap</code> to work with lagged values. Positional helpers
+<code>lag(k)</code>, <code>lead(k)</code>, <code>curr()</code> must be
+used to access lagged values. <code>lag_exists()</code> and
+<code>lead_exists()</code> can be used to test for out-of-bounds
+indexing. Out-of-bounds indexing returns <code>NA</code> by default,
+though this default can be changed in <code>lag()</code> and
+<code>lead()</code>.</p></li>
+</ul>
+<div id="multi-threading-safety" class="section level4">
+<h4>Multi-threading safety</h4>
+<p>All <code>pmap</code> variants try very hard to avoid unsafe
+multi-threaded calls to R C API entry-points. Multi-threaded and/or SIMD
+execution only applies for <code>RVectorisable</code> types, meaning
+that for types like <code>r_str</code> which are not inherently
+thread-safe, execution is <strong>always single-threaded</strong> and
+<strong>non-SIMD</strong>, even if you request multiple threads or
+SIMD.</p>
+<p>To illustrate this, let’s revisit our <code>pmax</code> from earlier
+but this time using <code>pmap_parallel</code> and with a template that
+accepts <code>r_dbl</code> or <code>r_str</code> vectors.</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb21-1"><a href="#cb21-1" tabindex="-1"></a></span>
+<span id="cb21-2"><a href="#cb21-2" tabindex="-1"></a> </span>
+<span id="cb21-3"><a href="#cb21-3" tabindex="-1"></a><span class="co">// Allows us to set threads and automatically restore them once thread_guard is destroyed (even if R aborts)</span></span>
+<span id="cb21-4"><a href="#cb21-4" tabindex="-1"></a><span class="kw">struct</span> thread_guard <span class="op">{</span></span>
+<span id="cb21-5"><a href="#cb21-5" tabindex="-1"></a></span>
+<span id="cb21-6"><a href="#cb21-6" tabindex="-1"></a>  <span class="dt">int</span> curr_threads<span class="op">;</span></span>
+<span id="cb21-7"><a href="#cb21-7" tabindex="-1"></a>  </span>
+<span id="cb21-8"><a href="#cb21-8" tabindex="-1"></a>  <span class="co">// Set threads and store previous threads</span></span>
+<span id="cb21-9"><a href="#cb21-9" tabindex="-1"></a>  thread_guard<span class="op">(</span><span class="dt">int</span> n<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb21-10"><a href="#cb21-10" tabindex="-1"></a>    curr_threads <span class="op">=</span> get_threads<span class="op">();</span></span>
+<span id="cb21-11"><a href="#cb21-11" tabindex="-1"></a>    set_threads<span class="op">(</span>n<span class="op">);</span></span>
+<span id="cb21-12"><a href="#cb21-12" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb21-13"><a href="#cb21-13" tabindex="-1"></a>  </span>
+<span id="cb21-14"><a href="#cb21-14" tabindex="-1"></a>  <span class="co">// Restore threads on destruction</span></span>
+<span id="cb21-15"><a href="#cb21-15" tabindex="-1"></a>  <span class="op">~</span>thread_guard<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb21-16"><a href="#cb21-16" tabindex="-1"></a>    set_threads<span class="op">(</span>curr_threads<span class="op">);</span></span>
+<span id="cb21-17"><a href="#cb21-17" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb21-18"><a href="#cb21-18" tabindex="-1"></a>  </span>
+<span id="cb21-19"><a href="#cb21-19" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb21-20"><a href="#cb21-20" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> F<span class="op">&gt;</span></span>
+<span id="cb21-21"><a href="#cb21-21" tabindex="-1"></a><span class="kw">decltype</span><span class="op">(</span><span class="kw">auto</span><span class="op">)</span> with_threads<span class="op">(</span><span class="dt">int</span> n<span class="op">,</span> F<span class="op">&amp;&amp;</span> f<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb21-22"><a href="#cb21-22" tabindex="-1"></a>  thread_guard guard<span class="op">(</span>n<span class="op">);</span></span>
+<span id="cb21-23"><a href="#cb21-23" tabindex="-1"></a>  <span class="cf">return</span> <span class="bu">std::</span>forward<span class="op">&lt;</span>F<span class="op">&gt;(</span>f<span class="op">)();</span></span>
+<span id="cb21-24"><a href="#cb21-24" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb21-25"><a href="#cb21-25" tabindex="-1"></a> </span>
+<span id="cb21-26"><a href="#cb21-26" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">&gt;</span></span>
+<span id="cb21-27"><a href="#cb21-27" tabindex="-1"></a><span class="kw">requires</span> <span class="op">(</span>any<span class="op">&lt;</span>T<span class="op">,</span> r_dbl<span class="op">,</span> r_str<span class="op">&gt;)</span> <span class="co">// doubles or strings</span></span>
+<span id="cb21-28"><a href="#cb21-28" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb21-29"><a href="#cb21-29" tabindex="-1"></a>r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> cpp_parallel_pmax<span class="op">(</span>r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> y<span class="op">,</span> <span class="dt">int</span> n_threads<span class="op">){</span></span>
+<span id="cb21-30"><a href="#cb21-30" tabindex="-1"></a>    <span class="cf">return</span> with_threads<span class="op">(</span>n_threads<span class="op">,</span> <span class="op">[&amp;]{</span></span>
+<span id="cb21-31"><a href="#cb21-31" tabindex="-1"></a>    </span>
+<span id="cb21-32"><a href="#cb21-32" tabindex="-1"></a>      <span class="cf">return</span> pmap_parallel<span class="op">(</span></span>
+<span id="cb21-33"><a href="#cb21-33" tabindex="-1"></a>      <span class="op">[](</span><span class="at">const</span> <span class="kw">auto</span><span class="op">&amp;</span> a<span class="op">,</span> <span class="at">const</span> <span class="kw">auto</span><span class="op">&amp;</span> b<span class="op">){</span></span>
+<span id="cb21-34"><a href="#cb21-34" tabindex="-1"></a>          <span class="cf">return</span> max<span class="op">(</span>a<span class="op">,</span> b<span class="op">);</span></span>
+<span id="cb21-35"><a href="#cb21-35" tabindex="-1"></a>      <span class="op">},</span> </span>
+<span id="cb21-36"><a href="#cb21-36" tabindex="-1"></a>      x<span class="op">,</span> y</span>
+<span id="cb21-37"><a href="#cb21-37" tabindex="-1"></a>    <span class="op">);</span></span>
+<span id="cb21-38"><a href="#cb21-38" tabindex="-1"></a>  <span class="op">});</span></span>
+<span id="cb21-39"><a href="#cb21-39" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb21-40"><a href="#cb21-40" tabindex="-1"></a>  </span></code></pre></div>
+<p>We can detect whether or not multiple threads were used by observing
+benchmark time.</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" tabindex="-1"></a><span class="fu">library</span>(bench)</span>
+<span id="cb22-2"><a href="#cb22-2" tabindex="-1"></a><span class="fu">library</span>(ggplot2)</span>
+<span id="cb22-3"><a href="#cb22-3" tabindex="-1"></a></span>
+<span id="cb22-4"><a href="#cb22-4" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">as.double</span>(<span class="fu">rpois</span>(<span class="dv">10</span><span class="sc">^</span><span class="dv">5</span>, <span class="at">lambda =</span> <span class="dv">10</span>))</span>
+<span id="cb22-5"><a href="#cb22-5" tabindex="-1"></a>y <span class="ot">&lt;-</span> <span class="fu">as.double</span>(<span class="fu">rpois</span>(<span class="dv">10</span><span class="sc">^</span><span class="dv">5</span>, <span class="at">lambda =</span> <span class="dv">15</span>))</span>
+<span id="cb22-6"><a href="#cb22-6" tabindex="-1"></a></span>
+<span id="cb22-7"><a href="#cb22-7" tabindex="-1"></a>(</span>
+<span id="cb22-8"><a href="#cb22-8" tabindex="-1"></a>  <span class="fu">mark</span>(</span>
+<span id="cb22-9"><a href="#cb22-9" tabindex="-1"></a>    <span class="at">single_threaded_pmax =</span> <span class="fu">cpp_parallel_pmax</span>(x, y, <span class="at">n_threads =</span> <span class="dv">1</span>),</span>
+<span id="cb22-10"><a href="#cb22-10" tabindex="-1"></a>    <span class="at">multi_threaded_pmax =</span> <span class="fu">cpp_parallel_pmax</span>(x, y, <span class="at">n_threads =</span> n_threads)</span>
+<span id="cb22-11"><a href="#cb22-11" tabindex="-1"></a>  ) <span class="sc">|&gt;</span> </span>
+<span id="cb22-12"><a href="#cb22-12" tabindex="-1"></a>    <span class="fu">autoplot</span>(<span class="at">type =</span> <span class="st">&quot;violin&quot;</span>) </span>
+<span id="cb22-13"><a href="#cb22-13" tabindex="-1"></a>) <span class="sc">+</span></span>
+<span id="cb22-14"><a href="#cb22-14" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;Numeric data&quot;</span>)</span></code></pre></div>
+<p><img role="img" src="data:image/png;base64,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" /><!-- --></p>
+<p>We can see that the same benchmarks on character vector data yield
+identical results between the one requesting 1 thread and the one
+requesting 2 threads. Even though we request 2 threads, it still gets
+executed as single-threaded.</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" tabindex="-1"></a></span>
+<span id="cb23-2"><a href="#cb23-2" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">as.character</span>(x)</span>
+<span id="cb23-3"><a href="#cb23-3" tabindex="-1"></a>y <span class="ot">&lt;-</span> <span class="fu">as.character</span>(y)</span>
+<span id="cb23-4"><a href="#cb23-4" tabindex="-1"></a></span>
+<span id="cb23-5"><a href="#cb23-5" tabindex="-1"></a>(</span>
+<span id="cb23-6"><a href="#cb23-6" tabindex="-1"></a>  <span class="fu">mark</span>(</span>
+<span id="cb23-7"><a href="#cb23-7" tabindex="-1"></a>    <span class="at">single_threaded_pmax =</span> <span class="fu">cpp_parallel_pmax</span>(x, y, <span class="at">n_threads =</span> <span class="dv">1</span>),</span>
+<span id="cb23-8"><a href="#cb23-8" tabindex="-1"></a>    <span class="at">multi_threaded_pmax =</span> <span class="fu">cpp_parallel_pmax</span>(x, y, <span class="at">n_threads =</span> n_threads)</span>
+<span id="cb23-9"><a href="#cb23-9" tabindex="-1"></a>  ) <span class="sc">|&gt;</span> </span>
+<span id="cb23-10"><a href="#cb23-10" tabindex="-1"></a>    <span class="fu">autoplot</span>(<span class="at">type =</span> <span class="st">&quot;violin&quot;</span>) </span>
+<span id="cb23-11"><a href="#cb23-11" tabindex="-1"></a>) <span class="sc">+</span></span>
+<span id="cb23-12"><a href="#cb23-12" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;Character data&quot;</span>)</span></code></pre></div>
+<p><img role="img" src="data:image/png;base64,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" /><!-- --></p>
+</div>
 </div>
 <div id="lagged-operations" class="section level3">
 <h3>Lagged operations</h3>
 <p>Use <code>pmap_with_shift</code> to perform lagged operations. It
 checks for out-of-bounds access and therefore is safer than hand-writing
 it via <code>pmap_with_index</code></p>
-<div class="sourceCode" id="cb19"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a></span>
-<span id="cb19-2"><a href="#cb19-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb19-3"><a href="#cb19-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> cpp_lag<span class="op">(</span>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> x<span class="op">,</span> <span class="dt">int</span> k<span class="op">){</span></span>
-<span id="cb19-4"><a href="#cb19-4" tabindex="-1"></a>    <span class="cf">return</span> pmap_with_shift<span class="op">([&amp;](</span><span class="kw">auto</span> a<span class="op">){</span></span>
-<span id="cb19-5"><a href="#cb19-5" tabindex="-1"></a>        <span class="cf">return</span> lag<span class="op">(</span>a<span class="op">,</span> k<span class="op">);</span></span>
-<span id="cb19-6"><a href="#cb19-6" tabindex="-1"></a>    <span class="op">},</span> x<span class="op">);</span></span>
-<span id="cb19-7"><a href="#cb19-7" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a><span class="co"># Lags</span></span>
-<span id="cb20-2"><a href="#cb20-2" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="dv">1</span>)</span>
-<span id="cb20-3"><a href="#cb20-3" tabindex="-1"></a><span class="co">#&gt;  [1] NA  1  2  3  4  5  6  7  8  9</span></span>
-<span id="cb20-4"><a href="#cb20-4" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="dv">2</span>)</span>
-<span id="cb20-5"><a href="#cb20-5" tabindex="-1"></a><span class="co">#&gt;  [1] NA NA  1  2  3  4  5  6  7  8</span></span>
-<span id="cb20-6"><a href="#cb20-6" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="dv">3</span>)</span>
-<span id="cb20-7"><a href="#cb20-7" tabindex="-1"></a><span class="co">#&gt;  [1] NA NA NA  1  2  3  4  5  6  7</span></span>
-<span id="cb20-8"><a href="#cb20-8" tabindex="-1"></a></span>
-<span id="cb20-9"><a href="#cb20-9" tabindex="-1"></a><span class="co"># Leads</span></span>
-<span id="cb20-10"><a href="#cb20-10" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="sc">-</span><span class="dv">1</span>)</span>
-<span id="cb20-11"><a href="#cb20-11" tabindex="-1"></a><span class="co">#&gt;  [1]  2  3  4  5  6  7  8  9 10 NA</span></span>
-<span id="cb20-12"><a href="#cb20-12" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="sc">-</span><span class="dv">2</span>)</span>
-<span id="cb20-13"><a href="#cb20-13" tabindex="-1"></a><span class="co">#&gt;  [1]  3  4  5  6  7  8  9 10 NA NA</span></span>
-<span id="cb20-14"><a href="#cb20-14" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="sc">-</span><span class="dv">3</span>)</span>
-<span id="cb20-15"><a href="#cb20-15" tabindex="-1"></a><span class="co">#&gt;  [1]  4  5  6  7  8  9 10 NA NA NA</span></span></code></pre></div>
-<p><code>pmap_with_shift</code> has three helpers: <code>lag()</code>,
-<code>lead()</code> and <code>curr()</code>. These are designed to
-assist in performing efficient lagged operations in a vectorised
-context, while maintaining readability</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb24-1"><a href="#cb24-1" tabindex="-1"></a></span>
+<span id="cb24-2"><a href="#cb24-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb24-3"><a href="#cb24-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> cpp_lag<span class="op">(</span>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> x<span class="op">,</span> <span class="dt">int</span> k<span class="op">){</span></span>
+<span id="cb24-4"><a href="#cb24-4" tabindex="-1"></a>    <span class="cf">return</span> pmap_with_shift<span class="op">([&amp;](</span><span class="kw">auto</span> a<span class="op">){</span></span>
+<span id="cb24-5"><a href="#cb24-5" tabindex="-1"></a>        <span class="cf">return</span> lag<span class="op">(</span>a<span class="op">,</span> k<span class="op">);</span></span>
+<span id="cb24-6"><a href="#cb24-6" tabindex="-1"></a>    <span class="op">},</span> x<span class="op">);</span></span>
+<span id="cb24-7"><a href="#cb24-7" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb25"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" tabindex="-1"></a><span class="co"># Lags</span></span>
+<span id="cb25-2"><a href="#cb25-2" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="dv">1</span>)</span>
+<span id="cb25-3"><a href="#cb25-3" tabindex="-1"></a><span class="co">#&gt;  [1] NA  1  2  3  4  5  6  7  8  9</span></span>
+<span id="cb25-4"><a href="#cb25-4" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="dv">2</span>)</span>
+<span id="cb25-5"><a href="#cb25-5" tabindex="-1"></a><span class="co">#&gt;  [1] NA NA  1  2  3  4  5  6  7  8</span></span>
+<span id="cb25-6"><a href="#cb25-6" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="dv">3</span>)</span>
+<span id="cb25-7"><a href="#cb25-7" tabindex="-1"></a><span class="co">#&gt;  [1] NA NA NA  1  2  3  4  5  6  7</span></span>
+<span id="cb25-8"><a href="#cb25-8" tabindex="-1"></a></span>
+<span id="cb25-9"><a href="#cb25-9" tabindex="-1"></a><span class="co"># Leads</span></span>
+<span id="cb25-10"><a href="#cb25-10" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="sc">-</span><span class="dv">1</span>)</span>
+<span id="cb25-11"><a href="#cb25-11" tabindex="-1"></a><span class="co">#&gt;  [1]  2  3  4  5  6  7  8  9 10 NA</span></span>
+<span id="cb25-12"><a href="#cb25-12" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="sc">-</span><span class="dv">2</span>)</span>
+<span id="cb25-13"><a href="#cb25-13" tabindex="-1"></a><span class="co">#&gt;  [1]  3  4  5  6  7  8  9 10 NA NA</span></span>
+<span id="cb25-14"><a href="#cb25-14" tabindex="-1"></a><span class="fu">cpp_lag</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="at">k =</span> <span class="sc">-</span><span class="dv">3</span>)</span>
+<span id="cb25-15"><a href="#cb25-15" tabindex="-1"></a><span class="co">#&gt;  [1]  4  5  6  7  8  9 10 NA NA NA</span></span></code></pre></div>
+<p><code>pmap_with_shift</code> has five helpers: <code>lag()</code>,
+<code>lead()</code>, <code>curr()</code>, <code>lag_exists()</code>, and
+<code>lead_exists()</code>. These are designed to assist in performing
+efficient lagged operations in a vectorised context, while maintaining
+readability.</p>
 <p><strong>Example:</strong> Lagged differencing</p>
-<div class="sourceCode" id="cb21"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb21-1"><a href="#cb21-1" tabindex="-1"></a></span>
-<span id="cb21-2"><a href="#cb21-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb21-3"><a href="#cb21-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_diff<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb21-4"><a href="#cb21-4" tabindex="-1"></a>    <span class="cf">return</span> pmap_with_shift<span class="op">([&amp;](</span><span class="kw">auto</span> a<span class="op">){</span></span>
-<span id="cb21-5"><a href="#cb21-5" tabindex="-1"></a>        <span class="cf">return</span> curr<span class="op">(</span>a<span class="op">)</span> <span class="op">-</span> lag<span class="op">(</span>a<span class="op">);</span></span>
-<span id="cb21-6"><a href="#cb21-6" tabindex="-1"></a>    <span class="op">},</span> x<span class="op">);</span></span>
-<span id="cb21-7"><a href="#cb21-7" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb22"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" tabindex="-1"></a><span class="fu">cpp_diff</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>)</span>
-<span id="cb22-2"><a href="#cb22-2" tabindex="-1"></a><span class="co">#&gt;  [1] NA  1  1  1  1  1  1  1  1  1</span></span>
-<span id="cb22-3"><a href="#cb22-3" tabindex="-1"></a><span class="fu">cpp_diff</span>(<span class="fu">seq</span>(<span class="dv">10</span>, <span class="dv">100</span>, <span class="at">by =</span> <span class="dv">5</span>))</span>
-<span id="cb22-4"><a href="#cb22-4" tabindex="-1"></a><span class="co">#&gt;  [1] NA  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5</span></span></code></pre></div>
+<div class="sourceCode" id="cb26"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb26-1"><a href="#cb26-1" tabindex="-1"></a></span>
+<span id="cb26-2"><a href="#cb26-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb26-3"><a href="#cb26-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_diff<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb26-4"><a href="#cb26-4" tabindex="-1"></a>    <span class="cf">return</span> pmap_with_shift<span class="op">([&amp;](</span><span class="kw">auto</span> a<span class="op">){</span></span>
+<span id="cb26-5"><a href="#cb26-5" tabindex="-1"></a>        <span class="cf">return</span> curr<span class="op">(</span>a<span class="op">)</span> <span class="op">-</span> lag<span class="op">(</span>a<span class="op">);</span></span>
+<span id="cb26-6"><a href="#cb26-6" tabindex="-1"></a>    <span class="op">},</span> x<span class="op">);</span></span>
+<span id="cb26-7"><a href="#cb26-7" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb27"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" tabindex="-1"></a><span class="fu">cpp_diff</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>)</span>
+<span id="cb27-2"><a href="#cb27-2" tabindex="-1"></a><span class="co">#&gt;  [1] NA  1  1  1  1  1  1  1  1  1</span></span>
+<span id="cb27-3"><a href="#cb27-3" tabindex="-1"></a><span class="fu">cpp_diff</span>(<span class="fu">seq</span>(<span class="dv">10</span>, <span class="dv">100</span>, <span class="at">by =</span> <span class="dv">5</span>))</span>
+<span id="cb27-4"><a href="#cb27-4" tabindex="-1"></a><span class="co">#&gt;  [1] NA  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5</span></span></code></pre></div>
 </div>
 <div id="in-place-functionals" class="section level3">
 <h3>In-place functionals</h3>
-<p>To perform in-place transformations, use <code>r_vec::apply</code> as
-<code>pmap</code> always allocates a fresh vector and therefore cannot
-do in-place modification.</p>
-<div class="sourceCode" id="cb23"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb23-1"><a href="#cb23-1" tabindex="-1"></a></span>
-<span id="cb23-2"><a href="#cb23-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb23-3"><a href="#cb23-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_in_place_abs<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;&amp;</span> x<span class="op">){</span></span>
-<span id="cb23-4"><a href="#cb23-4" tabindex="-1"></a>    x<span class="op">.</span>apply<span class="op">([](</span><span class="kw">auto</span> a<span class="op">){</span> <span class="cf">return</span> abs<span class="op">(</span>a<span class="op">);});</span></span>
-<span id="cb23-5"><a href="#cb23-5" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">;</span></span>
-<span id="cb23-6"><a href="#cb23-6" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb24"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="sc">-</span><span class="dv">20</span>, <span class="sc">-</span><span class="dv">10</span>)</span>
-<span id="cb24-2"><a href="#cb24-2" tabindex="-1"></a><span class="fu">cpp_in_place_abs</span>(x)</span>
-<span id="cb24-3"><a href="#cb24-3" tabindex="-1"></a><span class="co">#&gt; [1] 20 10</span></span>
-<span id="cb24-4"><a href="#cb24-4" tabindex="-1"></a></span>
-<span id="cb24-5"><a href="#cb24-5" tabindex="-1"></a>x <span class="co"># Modified in-place</span></span>
-<span id="cb24-6"><a href="#cb24-6" tabindex="-1"></a><span class="co">#&gt; [1] 20 10</span></span></code></pre></div>
-<p><code>r_vec::shift</code> is a helper which can shift an entire
-vector in-place</p>
-<div class="sourceCode" id="cb25"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb25-1"><a href="#cb25-1" tabindex="-1"></a></span>
-<span id="cb25-2"><a href="#cb25-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb25-3"><a href="#cb25-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_in_place_lag<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;&amp;</span> x<span class="op">,</span> <span class="dt">int</span> k<span class="op">){</span></span>
-<span id="cb25-4"><a href="#cb25-4" tabindex="-1"></a>    x<span class="op">.</span>shift<span class="op">(</span>k<span class="op">);</span></span>
-<span id="cb25-5"><a href="#cb25-5" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">;</span></span>
-<span id="cb25-6"><a href="#cb25-6" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb26"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb26-1"><a href="#cb26-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>)</span>
-<span id="cb26-2"><a href="#cb26-2" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
-<span id="cb26-3"><a href="#cb26-3" tabindex="-1"></a><span class="co">#&gt; [1] NA  1  2  3  4</span></span>
-<span id="cb26-4"><a href="#cb26-4" tabindex="-1"></a>x <span class="co"># lagged in-place</span></span>
-<span id="cb26-5"><a href="#cb26-5" tabindex="-1"></a><span class="co">#&gt; [1] NA  1  2  3  4</span></span>
-<span id="cb26-6"><a href="#cb26-6" tabindex="-1"></a></span>
-<span id="cb26-7"><a href="#cb26-7" tabindex="-1"></a><span class="co"># keep lagging until we run out of elements to lag</span></span>
-<span id="cb26-8"><a href="#cb26-8" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
-<span id="cb26-9"><a href="#cb26-9" tabindex="-1"></a><span class="co">#&gt; [1] NA NA  1  2  3</span></span>
-<span id="cb26-10"><a href="#cb26-10" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
-<span id="cb26-11"><a href="#cb26-11" tabindex="-1"></a><span class="co">#&gt; [1] NA NA NA  1  2</span></span>
-<span id="cb26-12"><a href="#cb26-12" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
-<span id="cb26-13"><a href="#cb26-13" tabindex="-1"></a><span class="co">#&gt; [1] NA NA NA NA  1</span></span>
-<span id="cb26-14"><a href="#cb26-14" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
-<span id="cb26-15"><a href="#cb26-15" tabindex="-1"></a><span class="co">#&gt; [1] NA NA NA NA NA</span></span></code></pre></div>
+<p>To perform in-place transformations, use <code>r_vector::apply</code>
+as <code>pmap</code> always allocates a fresh vector and therefore
+cannot do in-place modification. <code>apply</code> comes in the same
+flavours as <code>pmap</code> - <code>apply_simd</code>,
+<code>apply_parallel</code>, <code>apply_parallel_simd</code>, and the
+<code>_with_index</code> variants.</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb28-1"><a href="#cb28-1" tabindex="-1"></a></span>
+<span id="cb28-2"><a href="#cb28-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb28-3"><a href="#cb28-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_in_place_abs<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;&amp;</span> x<span class="op">){</span></span>
+<span id="cb28-4"><a href="#cb28-4" tabindex="-1"></a>    x<span class="op">.</span>apply<span class="op">([](</span><span class="kw">auto</span> a<span class="op">){</span> <span class="cf">return</span> abs<span class="op">(</span>a<span class="op">);</span> <span class="op">});</span></span>
+<span id="cb28-5"><a href="#cb28-5" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">;</span></span>
+<span id="cb28-6"><a href="#cb28-6" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb29"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb29-1"><a href="#cb29-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="sc">-</span><span class="dv">20</span>, <span class="sc">-</span><span class="dv">10</span>)</span>
+<span id="cb29-2"><a href="#cb29-2" tabindex="-1"></a><span class="fu">cpp_in_place_abs</span>(x)</span>
+<span id="cb29-3"><a href="#cb29-3" tabindex="-1"></a><span class="co">#&gt; [1] 20 10</span></span>
+<span id="cb29-4"><a href="#cb29-4" tabindex="-1"></a></span>
+<span id="cb29-5"><a href="#cb29-5" tabindex="-1"></a>x <span class="co"># Modified in-place</span></span>
+<span id="cb29-6"><a href="#cb29-6" tabindex="-1"></a><span class="co">#&gt; [1] 20 10</span></span></code></pre></div>
+<p><code>r_vector::shift</code> is a helper which can shift an entire
+vector in-place. It takes shift <code>k</code> and an optional
+<code>fill_value</code> which defaults to <code>NA</code>.</p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb30-1"><a href="#cb30-1" tabindex="-1"></a></span>
+<span id="cb30-2"><a href="#cb30-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb30-3"><a href="#cb30-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_in_place_lag<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;&amp;</span> x<span class="op">,</span> <span class="dt">int</span> k<span class="op">){</span></span>
+<span id="cb30-4"><a href="#cb30-4" tabindex="-1"></a>    x<span class="op">.</span>shift<span class="op">(</span>k<span class="op">);</span></span>
+<span id="cb30-5"><a href="#cb30-5" tabindex="-1"></a>    <span class="cf">return</span> x<span class="op">;</span></span>
+<span id="cb30-6"><a href="#cb30-6" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb31"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb31-1"><a href="#cb31-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>)</span>
+<span id="cb31-2"><a href="#cb31-2" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
+<span id="cb31-3"><a href="#cb31-3" tabindex="-1"></a><span class="co">#&gt; [1] NA  1  2  3  4</span></span>
+<span id="cb31-4"><a href="#cb31-4" tabindex="-1"></a>x <span class="co"># lagged in-place</span></span>
+<span id="cb31-5"><a href="#cb31-5" tabindex="-1"></a><span class="co">#&gt; [1] NA  1  2  3  4</span></span>
+<span id="cb31-6"><a href="#cb31-6" tabindex="-1"></a></span>
+<span id="cb31-7"><a href="#cb31-7" tabindex="-1"></a><span class="co"># keep lagging until we run out of elements to lag</span></span>
+<span id="cb31-8"><a href="#cb31-8" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
+<span id="cb31-9"><a href="#cb31-9" tabindex="-1"></a><span class="co">#&gt; [1] NA NA  1  2  3</span></span>
+<span id="cb31-10"><a href="#cb31-10" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
+<span id="cb31-11"><a href="#cb31-11" tabindex="-1"></a><span class="co">#&gt; [1] NA NA NA  1  2</span></span>
+<span id="cb31-12"><a href="#cb31-12" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
+<span id="cb31-13"><a href="#cb31-13" tabindex="-1"></a><span class="co">#&gt; [1] NA NA NA NA  1</span></span>
+<span id="cb31-14"><a href="#cb31-14" tabindex="-1"></a><span class="fu">cpp_in_place_lag</span>(x, <span class="at">k =</span> <span class="dv">1</span>)</span>
+<span id="cb31-15"><a href="#cb31-15" tabindex="-1"></a><span class="co">#&gt; [1] NA NA NA NA NA</span></span></code></pre></div>
 </div>
 <div id="vectorised-math" class="section level3">
 <h3>Vectorised math</h3>
-<p><code>pmap</code> makes it easy to write vectorised math
-functions</p>
-<p><strong>Example:</strong> Binary addition</p>
-<p>Here we are using <code>pmap_simd</code>, a variant of
-<code>pmap</code> that applies the supplied transformation under an omp
-simd directive. SIMD (single-instruction-multiple-data) is when the
-machine performs the same operation on multiple data points instead of
-one data point at time. In this case we are performing addition across
-multiple <code>r_int</code> values simultaneously. To safely use
-<code>pmap_simd</code>, iterations must be independent, not throw any
-errors, and the body must not have any side effects, which for math
-operations on <code>RMathType</code> classes is true.</p>
-<div class="sourceCode" id="cb27"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb27-1"><a href="#cb27-1" tabindex="-1"></a></span>
-<span id="cb27-2"><a href="#cb27-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb27-3"><a href="#cb27-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> cpp_add2<span class="op">(</span>r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>r_int<span class="op">&gt;</span> y<span class="op">){</span></span>
-<span id="cb27-4"><a href="#cb27-4" tabindex="-1"></a>    <span class="cf">return</span> pmap_simd<span class="op">([](</span><span class="kw">auto</span> a<span class="op">,</span> <span class="kw">auto</span> b<span class="op">){</span> <span class="cf">return</span> a <span class="op">+</span> b<span class="op">;</span> <span class="op">},</span> x<span class="op">,</span> y<span class="op">);</span></span>
-<span id="cb27-5"><a href="#cb27-5" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb28"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" tabindex="-1"></a><span class="fu">cpp_add2</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">5</span>, <span class="dv">10</span>)</span>
-<span id="cb28-2"><a href="#cb28-2" tabindex="-1"></a><span class="co">#&gt; [1] 11 12 13 14 15</span></span></code></pre></div>
-<p>While we could go ahead and write vectorised versions of all the core
-operators, cppally has already done this with particular focus on
-efficiency. All operators are parallelised via simd and avoid allocating
-new vectors (like R does) where possible.</p>
-<p>The vectorised operators currently defined:</p>
+<p><code>pmap</code> also makes it easy to write vectorised math
+functions.</p>
+<p><strong>Example:</strong> Vectorised square-root</p>
+<p>cppally provides a scalar version of <code>sqrt()</code>, which can
+be easily vectorised with <code>pmap</code>.</p>
+<div class="sourceCode" id="cb32"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb32-1"><a href="#cb32-1" tabindex="-1"></a></span>
+<span id="cb32-2"><a href="#cb32-2" tabindex="-1"></a></span>
+<span id="cb32-3"><a href="#cb32-3" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb32-4"><a href="#cb32-4" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_sqrt<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
+<span id="cb32-5"><a href="#cb32-5" tabindex="-1"></a>    <span class="cf">return</span> pmap_parallel_simd<span class="op">(</span></span>
+<span id="cb32-6"><a href="#cb32-6" tabindex="-1"></a>      <span class="op">[](</span><span class="kw">auto</span> v<span class="op">){</span></span>
+<span id="cb32-7"><a href="#cb32-7" tabindex="-1"></a>        <span class="cf">return</span> sqrt<span class="op">(</span>v<span class="op">);</span></span>
+<span id="cb32-8"><a href="#cb32-8" tabindex="-1"></a>      <span class="op">},</span> </span>
+<span id="cb32-9"><a href="#cb32-9" tabindex="-1"></a>    x</span>
+<span id="cb32-10"><a href="#cb32-10" tabindex="-1"></a>  <span class="op">);</span></span>
+<span id="cb32-11"><a href="#cb32-11" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here we are using <code>pmap_parallel_simd</code>, a variant of
+<code>pmap</code> that applies the supplied transformation under
+multiple threads and under an OpenMP SIMD directive. SIMD
+(single-instruction-multiple-data) is when the machine performs the same
+operation on multiple data points instead of one data point at time.</p>
+<p>Let’s benchmark this against <code>base::sqrt()</code>, but first
+let’s use 2 threads for the rest of the examples in this vignette.</p>
+<div class="sourceCode" id="cb33"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb33-1"><a href="#cb33-1" tabindex="-1"></a></span>
+<span id="cb33-2"><a href="#cb33-2" tabindex="-1"></a></span>
+<span id="cb33-3"><a href="#cb33-3" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb33-4"><a href="#cb33-4" tabindex="-1"></a><span class="dt">void</span> cpp_set_threads<span class="op">(</span><span class="dt">int</span> n<span class="op">){</span></span>
+<span id="cb33-5"><a href="#cb33-5" tabindex="-1"></a>  set_threads<span class="op">(</span>n<span class="op">);</span></span>
+<span id="cb33-6"><a href="#cb33-6" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb34"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb34-1"><a href="#cb34-1" tabindex="-1"></a><span class="fu">cpp_set_threads</span>(n_threads) <span class="co"># Set threads for the rest of the examples</span></span></code></pre></div>
+<div class="sourceCode" id="cb35"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb35-1"><a href="#cb35-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(<span class="dv">10</span><span class="sc">^</span><span class="dv">5</span>, <span class="at">mean =</span> <span class="dv">50</span>)</span>
+<span id="cb35-2"><a href="#cb35-2" tabindex="-1"></a></span>
+<span id="cb35-3"><a href="#cb35-3" tabindex="-1"></a>(</span>
+<span id="cb35-4"><a href="#cb35-4" tabindex="-1"></a>  <span class="fu">mark</span>(</span>
+<span id="cb35-5"><a href="#cb35-5" tabindex="-1"></a>    <span class="at">base_sqrt =</span> <span class="fu">sqrt</span>(x),</span>
+<span id="cb35-6"><a href="#cb35-6" tabindex="-1"></a>    <span class="at">cpp_sqrt =</span> <span class="fu">cpp_sqrt</span>(x)</span>
+<span id="cb35-7"><a href="#cb35-7" tabindex="-1"></a>  ) <span class="sc">|&gt;</span> </span>
+<span id="cb35-8"><a href="#cb35-8" tabindex="-1"></a>    <span class="fu">autoplot</span>(<span class="at">type =</span> <span class="st">&quot;violin&quot;</span>)</span>
+<span id="cb35-9"><a href="#cb35-9" tabindex="-1"></a>) <span class="sc">+</span> </span>
+<span id="cb35-10"><a href="#cb35-10" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;R vs C++ vectorised square-root&quot;</span>)</span></code></pre></div>
+<p><img role="img" src="data:image/png;base64,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" /><!-- --></p>
+<p>For more math functions, see <code>cppally/math/math.h</code>, a
+header containing a rich set of cppally math functions.</p>
+<p>cppally also provides quite a few vectorised operators
+out-of-the-box. The vectorised operators currently defined:</p>
 <p>binary:
 <code>+,-,*,/,+=,-=,*=,/=,==,&lt;=,&lt;,&gt;=,&gt;,|,&amp;</code></p>
 <p>unary: <code>!,-</code></p>
-<p><strong>Example:</strong> Mixed math operations</p>
-<div class="sourceCode" id="cb29"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb29-1"><a href="#cb29-1" tabindex="-1"></a></span>
-<span id="cb29-2"><a href="#cb29-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb29-3"><a href="#cb29-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_pythagorean_theorem<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> a<span class="op">,</span> r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> b<span class="op">){</span></span>
-<span id="cb29-4"><a href="#cb29-4" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">(</span>a <span class="op">*</span> a<span class="op">)</span> <span class="op">+</span> <span class="op">(</span>b <span class="op">*</span> b<span class="op">);</span> <span class="co">// Pythagorean theorem - a^2 + b^2 = c^2</span></span>
-<span id="cb29-5"><a href="#cb29-5" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb30"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb30-1"><a href="#cb30-1" tabindex="-1"></a><span class="fu">cpp_pythagorean_theorem</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="dv">10</span><span class="sc">:</span><span class="dv">1</span>)</span>
-<span id="cb30-2"><a href="#cb30-2" tabindex="-1"></a><span class="co">#&gt;  [1] 101  85  73  65  61  61  65  73  85 101</span></span></code></pre></div>
-<p>cppally provides a rich set of scalar math functions (defined in
-r_math.h) which can be trivially vectorised.</p>
-<p><strong>Example:</strong> vectorising <code>round</code>,
-<code>floor</code> and <code>ceiling</code></p>
-<div class="sourceCode" id="cb31"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb31-1"><a href="#cb31-1" tabindex="-1"></a></span>
-<span id="cb31-2"><a href="#cb31-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb31-3"><a href="#cb31-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_round<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> digits<span class="op">){</span></span>
-<span id="cb31-4"><a href="#cb31-4" tabindex="-1"></a>    <span class="cf">return</span> pmap<span class="op">([](</span><span class="kw">auto</span> a<span class="op">,</span> <span class="kw">auto</span> b<span class="op">){</span> <span class="cf">return</span> round<span class="op">(</span>a<span class="op">,</span> b<span class="op">);</span> <span class="op">},</span> x<span class="op">,</span> digits<span class="op">);</span></span>
-<span id="cb31-5"><a href="#cb31-5" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb31-6"><a href="#cb31-6" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb31-7"><a href="#cb31-7" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_floor<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb31-8"><a href="#cb31-8" tabindex="-1"></a>    <span class="cf">return</span> pmap<span class="op">([](</span><span class="kw">auto</span> a<span class="op">){</span> <span class="cf">return</span> floor<span class="op">(</span>a<span class="op">);</span> <span class="op">},</span> x<span class="op">);</span></span>
-<span id="cb31-9"><a href="#cb31-9" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb31-10"><a href="#cb31-10" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
-<span id="cb31-11"><a href="#cb31-11" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_ceiling<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">){</span></span>
-<span id="cb31-12"><a href="#cb31-12" tabindex="-1"></a>    <span class="cf">return</span> pmap<span class="op">([](</span><span class="kw">auto</span> a<span class="op">){</span> <span class="cf">return</span> ceiling<span class="op">(</span>a<span class="op">);</span> <span class="op">},</span> x<span class="op">);</span></span>
-<span id="cb31-13"><a href="#cb31-13" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb32"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">seq</span>(<span class="sc">-</span><span class="dv">2</span>, <span class="dv">2</span>, <span class="at">by =</span> <span class="fl">0.5</span>)</span>
-<span id="cb32-2"><a href="#cb32-2" tabindex="-1"></a><span class="fu">cpp_round</span>(x, <span class="at">digits =</span> <span class="dv">0</span>)</span>
-<span id="cb32-3"><a href="#cb32-3" tabindex="-1"></a><span class="co">#&gt; [1] -2 -2 -1  0  0  0  1  2  2</span></span>
-<span id="cb32-4"><a href="#cb32-4" tabindex="-1"></a><span class="fu">cpp_floor</span>(x)</span>
-<span id="cb32-5"><a href="#cb32-5" tabindex="-1"></a><span class="co">#&gt; [1] -2 -2 -1 -1  0  0  1  1  2</span></span>
-<span id="cb32-6"><a href="#cb32-6" tabindex="-1"></a><span class="fu">cpp_ceiling</span>(x)</span>
-<span id="cb32-7"><a href="#cb32-7" tabindex="-1"></a><span class="co">#&gt; [1] -2 -1 -1  0  0  1  1  2  2</span></span></code></pre></div>
+<p>When it comes to arithmetic operations, both cppally and R are
+heavily optimised to use in-place modification where possible. This
+greatly improves performance when multiple arithmetic operations are
+chained one after the other.</p>
+<p>Since R is heavily optimised in this case, any performance gains
+cppally makes over R are likely to come from using multiple threads.</p>
+<div class="sourceCode" id="cb36"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb36-1"><a href="#cb36-1" tabindex="-1"></a></span>
+<span id="cb36-2"><a href="#cb36-2" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span>RNumber T<span class="op">&gt;</span></span>
+<span id="cb36-3"><a href="#cb36-3" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb36-4"><a href="#cb36-4" tabindex="-1"></a>r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> cpp_add<span class="op">(</span>r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> y<span class="op">,</span> r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> z<span class="op">){</span></span>
+<span id="cb36-5"><a href="#cb36-5" tabindex="-1"></a>  <span class="cf">return</span> x <span class="op">+</span> y <span class="op">+</span> z<span class="op">;</span></span>
+<span id="cb36-6"><a href="#cb36-6" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb36-7"><a href="#cb36-7" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span>RNumber T<span class="op">&gt;</span></span>
+<span id="cb36-8"><a href="#cb36-8" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb36-9"><a href="#cb36-9" tabindex="-1"></a>r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> cpp_multiply<span class="op">(</span>r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> y<span class="op">,</span> r_vector<span class="op">&lt;</span>T<span class="op">&gt;</span> z<span class="op">){</span></span>
+<span id="cb36-10"><a href="#cb36-10" tabindex="-1"></a>  <span class="cf">return</span> x <span class="op">*</span> y <span class="op">*</span> z<span class="op">;</span></span>
+<span id="cb36-11"><a href="#cb36-11" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb37"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb37-1"><a href="#cb37-1" tabindex="-1"></a>a <span class="ot">&lt;-</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="sc">-</span><span class="dv">1</span><span class="dt">L</span>, <span class="cn">NA_integer_</span>, <span class="dv">0</span><span class="dt">L</span>, <span class="dv">1</span><span class="dt">L</span>, <span class="sc">-</span><span class="dv">100</span><span class="dt">L</span>, <span class="dv">100</span><span class="dt">L</span>), <span class="dv">10</span><span class="sc">^</span><span class="dv">5</span>, <span class="at">replace =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb37-2"><a href="#cb37-2" tabindex="-1"></a>b <span class="ot">&lt;-</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="cn">NA_real_</span>, <span class="dv">0</span>, <span class="sc">-</span><span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>, <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>, <span class="sc">-</span><span class="dv">10</span><span class="sc">^</span><span class="dv">9</span>, <span class="dv">10</span><span class="sc">^</span><span class="dv">9</span>), <span class="dv">10</span><span class="sc">^</span><span class="dv">5</span>, <span class="at">replace =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb37-3"><a href="#cb37-3" tabindex="-1"></a></span>
+<span id="cb37-4"><a href="#cb37-4" tabindex="-1"></a>results <span class="ot">&lt;-</span></span>
+<span id="cb37-5"><a href="#cb37-5" tabindex="-1"></a> <span class="fu">mark</span>(</span>
+<span id="cb37-6"><a href="#cb37-6" tabindex="-1"></a>   <span class="st">`</span><span class="at">a + a + a (base w/integers)</span><span class="st">`</span> <span class="ot">=</span> a <span class="sc">+</span> a <span class="sc">+</span> a,</span>
+<span id="cb37-7"><a href="#cb37-7" tabindex="-1"></a>   <span class="st">`</span><span class="at">a * a * a (base w/integers)</span><span class="st">`</span> <span class="ot">=</span> a <span class="sc">*</span> a <span class="sc">*</span> a,</span>
+<span id="cb37-8"><a href="#cb37-8" tabindex="-1"></a>   <span class="st">`</span><span class="at">b + b + b (base w/doubles)</span><span class="st">`</span> <span class="ot">=</span> b <span class="sc">+</span> b <span class="sc">+</span> b,</span>
+<span id="cb37-9"><a href="#cb37-9" tabindex="-1"></a>   <span class="st">`</span><span class="at">b * b * b (base w/doubles)</span><span class="st">`</span> <span class="ot">=</span> b <span class="sc">*</span> b <span class="sc">*</span> b,</span>
+<span id="cb37-10"><a href="#cb37-10" tabindex="-1"></a>   </span>
+<span id="cb37-11"><a href="#cb37-11" tabindex="-1"></a>   <span class="st">`</span><span class="at">a + a + a (cppally w/integers)</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">cpp_add</span>(a, a, a),</span>
+<span id="cb37-12"><a href="#cb37-12" tabindex="-1"></a>   <span class="st">`</span><span class="at">a * a * a (cppally w/integers)</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">cpp_multiply</span>(a, a, a),</span>
+<span id="cb37-13"><a href="#cb37-13" tabindex="-1"></a>   <span class="st">`</span><span class="at">b + b + b (cppally w/doubles)</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">cpp_add</span>(b, b, b),</span>
+<span id="cb37-14"><a href="#cb37-14" tabindex="-1"></a>   <span class="st">`</span><span class="at">b * b * b (cppally w/doubles)</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">cpp_multiply</span>(b, b, b),</span>
+<span id="cb37-15"><a href="#cb37-15" tabindex="-1"></a>   <span class="at">check =</span> <span class="cn">FALSE</span></span>
+<span id="cb37-16"><a href="#cb37-16" tabindex="-1"></a> )</span>
+<span id="cb37-17"><a href="#cb37-17" tabindex="-1"></a></span>
+<span id="cb37-18"><a href="#cb37-18" tabindex="-1"></a>results <span class="sc">|&gt;</span> </span>
+<span id="cb37-19"><a href="#cb37-19" tabindex="-1"></a>  <span class="fu">autoplot</span>(<span class="at">type =</span> <span class="st">&quot;violin&quot;</span>) <span class="sc">+</span></span>
+<span id="cb37-20"><a href="#cb37-20" tabindex="-1"></a>  <span class="fu">geom_violin</span>(<span class="fu">aes</span>(<span class="at">fill =</span> <span class="fu">ifelse</span>(<span class="fu">grepl</span>(<span class="st">&quot;base&quot;</span>, expression), <span class="st">&quot;base&quot;</span>, <span class="st">&quot;cppally&quot;</span>))) <span class="sc">+</span></span>
+<span id="cb37-21"><a href="#cb37-21" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;cppally vs R arithmetic operations&quot;</span>) <span class="sc">+</span> </span>
+<span id="cb37-22"><a href="#cb37-22" tabindex="-1"></a>  <span class="fu">scale_y_discrete</span>(<span class="at">limits =</span> rev) <span class="sc">+</span></span>
+<span id="cb37-23"><a href="#cb37-23" tabindex="-1"></a>  <span class="fu">theme</span>(<span class="at">legend.title =</span> <span class="fu">element_blank</span>())</span></code></pre></div>
+<p><img role="img" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASAAAAEgCAMAAAAjXV6yAAACzVBMVEUAAAAAADoAAGYAOjoAOmYAOpAAZrYAv8QzMzM6AAA6ADo6AGY6OgA6Ojo6OmY6OpA6ZmY6ZpA6ZrY6kLY6kNtNTU1NTVFNTVdNTVhNTVlNTV5NTWNNTWRNTW5NTW9NTXlNTY5NUFFNU1lNWU1NYIdNZG9NZKtNaX9NaaVNaatNbmNNbo5NbqtNebVNjqVNjqtNjrVNjshRTVdRY2RSTVZTTU1TTW9UTU1VTU1VTV5VTWRWTU1WTVBWTW5WTY5WU01WU1lZTU1ZTVxZTWRZTXleTU1eTU5eTV5eaatfTVFfTW5gTU1jbqtkTVJkTVNkTWRkjoNkq81mAABmADpmAGZmOgBmOpBmZjpmZmZmZrZmkJBmkNtmtrZmtttmtv9nuchpTU1pTVlpTV1pTV5pTWRpf2Fpf2lrTU1rTY5uTU1uTV5uTW5uTXJuTXluTYNuTY5uaX9ubk1ubo5ubqtujshuq6tuq+RvTVJvTV5vTW9vuat3UU13kG55TU15TY55eU15ooN/YU1/aWCDTU2DTVmDjm6OTU2OTVeOTVyOTWmOTW6OTW+OTY6Obk2ObmCObm6ObquOeU2Og1mOjm6Ojo6OooOOq6uOyI6OyP+QOgCQOjqQOmaQZgCQZjqQZmaQkDqQkLaQtpCQttuQ27aQ2/+dXk2d5Mid5P+i5Kui/8iraU2raVmrbk2rbmCrbmSrbm6rbo6rjk2rq26rq46ryKur5Mir5P+1yI615Ku2ZgC2Zjq2Zma2kDq2tpC2ttu229u22/+2/7a2///Ijk3Ijm7ItW7IzX/I5I7I5JHI5J3I5KvI/7XI/8jI/+TI///NnVnbkDrbtmbbtpDb27bb29vb2//b/7bb///kol3kq27kyHnkyI7k5IPk/6Lk/6Xk/8jk/+Tk///r6+v4dm3/tmb/yI7/25D/27b/29v/5Kv//7b//8j//9v//+T///8UH3mRAAAACXBIWXMAAA7DAAAOwwHHb6hkAAAN6klEQVR4nO2diYMTVxnAZ1s2Elq1xY1KWyxSqyKrdr3vuwreplDxiveBVVdtXW/rVbRItSrqbr3tWi8qau1qsCqSahVxDR5d13qB2eCG7PwNvu+9N0eOme/N8OZ4yfcDMpOXmWHnt+/KfPkylk2EYmX9A+QdEoRAghBIEAIJQiBBCCQIgQQhDLyg9szoAvxT27puCe5y0CkhQR04gqzTDskSEtRBXYhpH7DGZInJgo4WrVWztt0qjzW619iLZ1rWyEs8QQ2rYvMt+K5CRKtcsNtfZtu9zDmkFORuZ7SgBjSFkVl2MmcVu9ectlJxBYEMts8It2c3ixV+hEp7Rm4nkIL+Vx2AGtSeYSd7lJ1Iq2wVFtq3WAXfWnvmtIOgoeA1sSqce1W2tfYM6GJFzeLaBb6doKcPapsrqFmUv+RWmZ81O1tvjT3+5edfKVo+QdDGvJZT5xWuwI5y+ot/6R1UChpZ6/ZZJguS7UI0Hjhlb429ys/UJwhedFqY0Mu7pSpsdrYzqvMmdrR4ttenD6gg1tjO+tovbi/7BEHFqrqjGRSJmvan7b4WJfqghuVu1zJZUEcTY73OIW9N2Ovog9hpv9RtYWDx+rLT8/z5S04vLTtpr49umiuId9LNMoxP1t3cTlquMTUL9ontlpAjBLVn7rxm1t29WdwBVhpsD7t9i9P0pKBW2alSBgsSwzzveU8vilbircnRu0MQ64Hd+THo4s/khk6TcuZBdUvWLoNHMT5RhCke63nY9BD6WW8Nao+16husl/EJ8kZzQDrgE0V30HIEMW+y0ZksSNJy+xJvrS8Ndz4YgSESdGK76jsyP0MjiHXg1ljgq8EMjSDWq6yNc/QBEJQsJAiBBCGQIAQShECCEEgQAglCIEEIJAiBBCGQIAQShECCEEgQAglCIEEIJAjBXEGr0/lvIgta+cE8WmIvTtm1acXj7f/xpLP/srsWyPLlx+RaTgUtbt57zTRSws9CVZB3xkqCwL0gX4KWd5ZK4oyXL5tDS0BObS9/JguXSqUN87Z9chdf2Cv7pvluS+PHliaYluXLf8g246/KTdhi86fm5A7Lb79mw7xziD3z4kfKlaCTu+fkr/fkniP8JwwvYY+18WPsmSyEksUJVjjFF7weLDJxvCmCoJ1TIAt2l5uwxdL6Oflseee07RxCVM3VDJ0aglFvYu6vDi3hrYbXomlZCJ5s4dDd5NabJlb2z7G/IGhy3hYLuQlsxV6Sz+BleQivjeVMUE1UcKUSVhds+9Y5KYkXspa2njeYEixFtTs8yaoeM9UpSGwCjkGQfMZelofIqaCTu6a7etCwEqcGsZ7GtxnT5qtytc9fsbL/pgl7acLuFCQ2cWqQeOb8R9y820ung5ogfgKyL8ZLRB/knfllc3Bm8K82JU4Sem3RC9WmOwU5m3h9kOybnEMoD4+aUGxii6XS5s7BPKxEjmLQImRhzR3F1sshD8awDfOslvgErezjoxhswhYP3j8nd+A1qNY1iqVEIjNp/9zmFI4yOd+nNOUWltBbjVM+i5V9JaeudaLHfQTMfS+WEiQIgQQhkCAEEoRAghBIEAIJQiBBCCQIgQQhkCAEEoRAghAUBamGC4ORl8V6jxw3cJgSaoKUw4XBBAkyOnAYPVzIL5Ge3PMjHsMQC7mFEASXoCFgMRiBw+jhQjjxpfF/72LnDacqFrudy87s79KUvQRVYHACh9HChVLVrmkR1OILuYWM6lx7DAJmAxM4jBouFB0KP5fatFzILcT5r+y/+Vq+yUAEDqOHC2UNYmbkr19WJLeJ2Yt7xfmdeuAwB4Kihwt55zt5ZNcEj6OKhdzCiyLy/QYjcBg9XChGsd2f5aOYWMgt5Pk706dhDBy6MxrfZzl6N7pC/XiT831KTQ4cOj97iKDFvtHAXihwaAwkCIEEIZAgBBKEQIIQzBWUg7ca+YYEIZAgBBKEQIIQSBACCUIgQQhGCxrilEwlhiwl04udeheEw8uGKyXTi516P1142RCmZAoJ7HfImELLhi4l04umejGXsLIhS8n0R1Pd5hRalk5KZuqC5I0WfN9qLuiNpmJl6aRkpi1I3KukH73RVKwslZTMtAW1yjG+zzyAVFIy069B+gSlkpKZeh/U6Ol98k36Tczq30nnldwM83mFBCGkL4jfWyvOnRWyIXVB/K4trbI5htKhex5k2liWOIMm6Hh/4h9w0JrY8dV9iX9Aczvp/hxf/d8+6BE0EJAghIQEsR7auLca/aEahECCXPqfdIKCRDM7lRaWbs5q6oKqBZgK1UNvoxhKLnJWMUHVqJcF/TNpuCztzqTjxVMzz1lNVBBMox1B8eKp2eesooJ28JvLQwiH36fXEu8fgrsW3zXpMbiXdtXXxKLHU6WqDHNWUUGjC80zDrUumbVhse2QDX1KdcwO7Fo64mIF27uddqx4avY5qypNTDQzZgc8wRpbgCtEUCfx4qmyBmWYs4oJOjArJfHGxSoFazV8jjwy2/d4gYLixVOzz1lVqEHtmQpc22FNDAoaowuBtadTUNc8KF48NfOcVVRQAcyAnOaaWSYHBEEf1Ai6zXES86Asc1YVRjFoTHXLWrW9IhsatLGgFhY8D4pBHnJWk5tJd82DTCU5QX3mQSaS4Hux7nmQmdDlDgQShJBwVKNSN7+JJSaoOnq7GOmN5vjqO/VB2zBfGYBhngSFkpwguw5NbABCz4kJgstrgxB6Tk7QQJCcIK0fA86ORDtpHT9g1sQXJC8TdePvpEPmiN5lPOeKV1hJtJRMuKoBlyL7/Y8914TwwGFSgsI/vOCervsltyElMVIylQXhgcNwQfzaWGvbV/m1aLGQMSAhqMpW7uqvKYqdtEywtG33onJYSbSUTB4kZI5lkHBS/BP784CP2Ek1cBgqCHraBpvPjC6wCV9LLkQMSPxtjNmNjpFcVZC4cu59yW14yXyUlEx+Zb407btAzwWNH/Mu47OdlAOHoYJEI4L+tn3drFxAeWubFNS6dOFAx9XX7o/gBfTUXoKlQknElEwZDoEF28AVxPf3hRJVA4fhgnjz4fGwakUuZAxICGpfd/2lHX2x4oc4nQRLpZLoKZnShS3irFyQ2N8LJSoHDlVqEDMDNUguyhWvidn1HZ0GFD8GLBIsFUsipmQG1iBW6IUSbVsxcIj2Qc0zflUu8HiYWMgYkBcNiiVoontACSmJmJLZ2QdBU1pkdc7bX5QrpmSqjWKXvJCPYmIhY0BSUPuLnQJ8+WKwbVATkwmWiiXRUjIhxuONYrDHO/bMy/3lKAY7qQYOwwUJS15Mvofm2s7nPfMgHZ/jTPILV9HA4akJqndHEHN6l8xA8MChgqAoeG9W/xr/IDkiyTerovf5GV1R7MDXSVvs3WqzaPwl1+TCPq3yyJmW4UEN/fg7afau1vQrrvrxCapaBd7MCD++TlpMFA3vg7TjCXqRWBo+imln0KIa2hm0Dy9oZ9A+vKCdQYvNa4cEIZj74YX0v9zEsA8v5OHrcaLHU4NZDkzJ1BpZ1Y6aIOV4ajBBgjRHVrUTLihyPDVOSqbWyKp2wgVFjafGSsnUGlnVDtrEIsVTpapoKZlaI6vaCRUUOZ4aNyVTX2RVO1gNihZPjZWSqTWyqp1wQVHjqbFSMrVGVrWDjWIR46lxUjJjRlbzICgaulMy+0O3EQ2HbiOaN0gQAglCIEEIJAiBBCGQIAQShECCEEgQAglCIEEIJAiBBCGQIAQFQf2SK5Gy7HJWtZOIoAxzVrWjImhv71fchpdlmLOqHRVBTuzULyOsLMucVe0oNjERGvS+4ja0LMucVe0oCPJFU93aElqWZc6qdtRqkNOHes0prCydnNWUUBHUE01FytLJWU0JtVGsJ5oVXpZhzqp2ErudelKYHFn1yC5nVTv0XgyBBCGQIAQShECCEEgQAglCIEEIJAiBBCGQIAQShECCEEgQAglCCBQUL54ajPac1ZTQKGjIclbjxVOHKGc1Vjx1mHJWY8VThylnNVY8Nc2c1ZQIq0HR46lp5qymRLCgOPHUNHNWUyJsFIsRT00xZzUlKGcVgXJWEei9GAIJQiBBCCQIgQQhkCAEEoRgrqCs383nHhKEQIIQSFA+IEEIJAiBBCGQIARjBC1PHp48/Ob383jT5o+wh/F0rpyZImipdB77U/pg6R4XXHXRNx+476oJkduZOIYIqq3/9Lor133hUee9+3mP+fabnvuUUukhnymVHsrrU+n5/JFnC+vHEEGiif3mET9962sefcPHn7huyz8efp+rP1Q6/7Ynn/vsP97zDUc++oCkapRRgn59r5/c71Xn3PCxja/c9K+nv/zqD299wu/f+Ywt/3zOM2/uF0DRg1GCnBr0pFdvkYL+8L1Hls5948UlJ1lYP0YJuu2p3/kE74Oe9oHfPu49b/kkE/T9d235+znfspcuHL8jmWHNKEG/u/gF333YBa970Hvvv++1937fRTdufeznNj5r09/uvumOC0mQfx608RXs4b7/uXHr49/GVs5/PY1iAfT9TJ9mSBCC0YLSgAQhkCAEEoRglKATB+3mmj73iE8SkwSlLgcgQQgGCWoWLWuMSWqu+TpfYw8V227PWFaS92U0SBCvQSCoOLpg1+Gu1PXTDvH7niZ5d1gjBVWgOlV4Ab+rJ9zeMylMFARdkfNQt6xk711pvKCk771suqDGSMIjm0mCoKvpFtSeYVUoSUsmCbKrVqFbEB/mk6xFRgnKAhKEQIIQSBACCUIgQQgkCIEEIZAgBBKE8H/ubAFXi4SvegAAAABJRU5ErkJggg==" /><!-- --></p>
+<p>From the results we can see that integer operations are faster with
+cppally. This is partly due to multiple threads being used, but also
+because cppally integer arithmetic is carefully written to be
+SIMD-friendly. It propagates <code>NA</code> values and also returns
+<code>NA</code> on integer-overflow, so it is just as safe as R. The
+difference is that the arithmetic is written to be as branchless as
+possible, allowing SIMD instructions to be executed. You can see the
+internal implementation in <code>scalar/arithmetic_ops.h</code>.</p>
+</div>
+<div id="grouped-operations" class="section level3">
+<h3>Grouped operations</h3>
+<p>In modern analyses it has become more common to see grouped
+operations. Packages like ‘dplyr’ (via <code>group_by()</code>) and
+‘data.table’ (via <code>by</code> keyword) natively support applying R
+functions by group.</p>
+<p>cppally provides a similar group-by-and-apply functionality via
+<code>apply_by_group()</code>: a C++ functional that accepts a vector
+<code>x</code> of data, groups <code>g</code>, and a vector-based
+function <code>fn</code> which is applied to <code>x</code> on a
+group-by-group basis using <code>g</code>.</p>
+<p><code>fn</code> can be a C++ function or an <code>r_function</code>
+(R function). We will first use <code>apply_by_group()</code> with an
+<code>r_function</code>, then with a C++ function, and compare both to
+base R.</p>
+<div id="applying-an-r-function-by-group" class="section level4">
+<h4>Applying an R function by group</h4>
+<p>To produce the groups, use <code>make_groups()</code>, a function
+that converts a vector into group IDs and other group metadata, wrapped
+in a C++ class <code>groups</code>.</p>
+<div class="sourceCode" id="cb38"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb38-1"><a href="#cb38-1" tabindex="-1"></a></span>
+<span id="cb38-2"><a href="#cb38-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb38-3"><a href="#cb38-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> cpp_grouped_apply<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>r_str<span class="op">&gt;</span> g<span class="op">,</span> r_function fn<span class="op">){</span></span>
+<span id="cb38-4"><a href="#cb38-4" tabindex="-1"></a>    groups grps <span class="op">=</span> make_groups<span class="op">(</span>g<span class="op">);</span></span>
+<span id="cb38-5"><a href="#cb38-5" tabindex="-1"></a>    <span class="kw">auto</span> result <span class="op">=</span> apply_by_group<span class="op">&lt;</span>r_dbl<span class="op">&gt;(</span>x<span class="op">,</span> grps<span class="op">,</span> fn<span class="op">);</span></span>
+<span id="cb38-6"><a href="#cb38-6" tabindex="-1"></a>    <span class="cf">return</span> add_group_names<span class="op">(</span>result<span class="op">,</span> g<span class="op">,</span> grps<span class="op">);</span></span>
+<span id="cb38-7"><a href="#cb38-7" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The group names are added using a helper
+<code>add_group_names()</code></p>
+<div class="sourceCode" id="cb39"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb39-1"><a href="#cb39-1" tabindex="-1"></a></span>
+<span id="cb39-2"><a href="#cb39-2" tabindex="-1"></a><span class="co">// Helper to add group names, which are the unique values of group_data </span></span>
+<span id="cb39-3"><a href="#cb39-3" tabindex="-1"></a><span class="co">// so that each result is associated with its group name</span></span>
+<span id="cb39-4"><a href="#cb39-4" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> add_group_names<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;&amp;</span> result<span class="op">,</span> r_vector<span class="op">&lt;</span>r_str<span class="op">&gt;</span> group_data<span class="op">,</span> groups g<span class="op">){</span></span>
+<span id="cb39-5"><a href="#cb39-5" tabindex="-1"></a>    r_vector<span class="op">&lt;</span>r_str<span class="op">&gt;</span> nms <span class="op">=</span> group_names<span class="op">(</span>group_data<span class="op">,</span> g<span class="op">);</span></span>
+<span id="cb39-6"><a href="#cb39-6" tabindex="-1"></a>    result<span class="op">.</span>set_names<span class="op">(</span>nms<span class="op">);</span></span>
+<span id="cb39-7"><a href="#cb39-7" tabindex="-1"></a>    <span class="cf">return</span> result<span class="op">;</span></span>
+<span id="cb39-8"><a href="#cb39-8" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>For comparison, a base R split-and-apply equivalent</p>
+<div class="sourceCode" id="cb40"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb40-1"><a href="#cb40-1" tabindex="-1"></a>r_grouped_apply <span class="ot">&lt;-</span> <span class="cf">function</span>(x, g, fn){</span>
+<span id="cb40-2"><a href="#cb40-2" tabindex="-1"></a>  <span class="fu">vapply</span>(<span class="fu">split</span>(x, <span class="fu">factor</span>(g, <span class="at">levels =</span> <span class="fu">unique</span>(g))), fn, <span class="dv">0</span>)</span>
+<span id="cb40-3"><a href="#cb40-3" tabindex="-1"></a>}</span></code></pre></div>
+</div>
+<div id="applying-a-c-function-by-group" class="section level4">
+<h4>Applying a C++ function by group</h4>
+<p>Instead of passing R’s <code>sum()</code>, we can pass a lambda
+calling a C++ version, <code>cppally::sum()</code>.</p>
+<div class="sourceCode" id="cb41"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb41-1"><a href="#cb41-1" tabindex="-1"></a></span>
+<span id="cb41-2"><a href="#cb41-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb41-3"><a href="#cb41-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> grouped_sum<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>r_str<span class="op">&gt;</span> g<span class="op">){</span></span>
+<span id="cb41-4"><a href="#cb41-4" tabindex="-1"></a>  </span>
+<span id="cb41-5"><a href="#cb41-5" tabindex="-1"></a>    groups grps <span class="op">=</span> make_groups<span class="op">(</span>g<span class="op">);</span></span>
+<span id="cb41-6"><a href="#cb41-6" tabindex="-1"></a>  </span>
+<span id="cb41-7"><a href="#cb41-7" tabindex="-1"></a>    r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> sums <span class="op">=</span> apply_by_group<span class="op">(</span></span>
+<span id="cb41-8"><a href="#cb41-8" tabindex="-1"></a>      x<span class="op">,</span> <span class="co">/*groups = */</span> grps<span class="op">,</span></span>
+<span id="cb41-9"><a href="#cb41-9" tabindex="-1"></a>      <span class="op">[](</span><span class="at">const</span> r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;&amp;</span> chunk<span class="op">){</span></span>
+<span id="cb41-10"><a href="#cb41-10" tabindex="-1"></a>          <span class="cf">return</span> sum<span class="op">(</span>chunk<span class="op">,</span> <span class="co">/*na_rm = */</span> <span class="kw">true</span><span class="op">);</span></span>
+<span id="cb41-11"><a href="#cb41-11" tabindex="-1"></a>      <span class="op">});</span></span>
+<span id="cb41-12"><a href="#cb41-12" tabindex="-1"></a></span>
+<span id="cb41-13"><a href="#cb41-13" tabindex="-1"></a>      <span class="cf">return</span> add_group_names<span class="op">(</span>sums<span class="op">,</span> g<span class="op">,</span> grps<span class="op">);</span></span>
+<span id="cb41-14"><a href="#cb41-14" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+</div>
+<div id="benchmarks" class="section level4">
+<h4>Benchmarks</h4>
+<p><code>base::sum()</code> is a primitive, which means it calls C code
+directly, hence it should provide a good baseline for what can be
+achieved with a base R split-and-apply method.</p>
+<div class="sourceCode" id="cb42"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb42-1"><a href="#cb42-1" tabindex="-1"></a><span class="fu">cpp_set_threads</span>(<span class="dv">1</span>) <span class="co"># Run these benchmarks using a single thread</span></span>
+<span id="cb42-2"><a href="#cb42-2" tabindex="-1"></a>n <span class="ot">&lt;-</span> <span class="dv">10</span><span class="sc">^</span><span class="dv">5</span></span>
+<span id="cb42-3"><a href="#cb42-3" tabindex="-1"></a>x <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n)</span>
+<span id="cb42-4"><a href="#cb42-4" tabindex="-1"></a></span>
+<span id="cb42-5"><a href="#cb42-5" tabindex="-1"></a><span class="co"># 3 groups</span></span>
+<span id="cb42-6"><a href="#cb42-6" tabindex="-1"></a>g <span class="ot">&lt;-</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">&quot;a&quot;</span>, <span class="st">&quot;b&quot;</span>, <span class="st">&quot;c&quot;</span>), n, <span class="at">replace =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb42-7"><a href="#cb42-7" tabindex="-1"></a>(</span>
+<span id="cb42-8"><a href="#cb42-8" tabindex="-1"></a>  <span class="fu">mark</span>(</span>
+<span id="cb42-9"><a href="#cb42-9" tabindex="-1"></a>  <span class="at">base_grouped_sum =</span> <span class="fu">r_grouped_apply</span>(x, g, sum),</span>
+<span id="cb42-10"><a href="#cb42-10" tabindex="-1"></a>  <span class="at">cppally_grouped_r_sum =</span> <span class="fu">cpp_grouped_apply</span>(x, g, sum),</span>
+<span id="cb42-11"><a href="#cb42-11" tabindex="-1"></a>  <span class="at">cppally_grouped_cpp_sum =</span> <span class="fu">grouped_sum</span>(x, g),</span>
+<span id="cb42-12"><a href="#cb42-12" tabindex="-1"></a>  <span class="at">min_iterations =</span> <span class="dv">10</span></span>
+<span id="cb42-13"><a href="#cb42-13" tabindex="-1"></a>) <span class="sc">|&gt;</span> </span>
+<span id="cb42-14"><a href="#cb42-14" tabindex="-1"></a>    <span class="fu">autoplot</span>(<span class="at">type =</span> <span class="st">&quot;violin&quot;</span>)</span>
+<span id="cb42-15"><a href="#cb42-15" tabindex="-1"></a>) <span class="sc">+</span> </span>
+<span id="cb42-16"><a href="#cb42-16" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;R vs cppally sum by group - 3 groups&quot;</span>) <span class="sc">+</span></span>
+<span id="cb42-17"><a href="#cb42-17" tabindex="-1"></a>  bench<span class="sc">::</span><span class="fu">scale_x_bench_time</span>(<span class="at">base =</span> <span class="dv">2</span>)</span></code></pre></div>
+<p><img role="img" src="data:image/png;base64,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" /><!-- --></p>
+<div class="sourceCode" id="cb43"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb43-1"><a href="#cb43-1" tabindex="-1"></a></span>
+<span id="cb43-2"><a href="#cb43-2" tabindex="-1"></a><span class="co"># 1e04 groups</span></span>
+<span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a>g <span class="ot">&lt;-</span> <span class="fu">as.character</span>(<span class="fu">sample.int</span>(<span class="dv">10</span><span class="sc">^</span><span class="dv">4</span>, n, <span class="at">replace =</span> <span class="cn">TRUE</span>))</span>
+<span id="cb43-4"><a href="#cb43-4" tabindex="-1"></a>(</span>
+<span id="cb43-5"><a href="#cb43-5" tabindex="-1"></a>  <span class="fu">mark</span>(</span>
+<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a>  <span class="at">base_grouped_sum =</span> <span class="fu">r_grouped_apply</span>(x, g, sum),</span>
+<span id="cb43-7"><a href="#cb43-7" tabindex="-1"></a>  <span class="at">cppally_grouped_r_sum =</span> <span class="fu">cpp_grouped_apply</span>(x, g, sum),</span>
+<span id="cb43-8"><a href="#cb43-8" tabindex="-1"></a>  <span class="at">cppally_grouped_cpp_sum =</span> <span class="fu">grouped_sum</span>(x, g),</span>
+<span id="cb43-9"><a href="#cb43-9" tabindex="-1"></a>  <span class="at">min_iterations =</span> <span class="dv">10</span></span>
+<span id="cb43-10"><a href="#cb43-10" tabindex="-1"></a>) <span class="sc">|&gt;</span> </span>
+<span id="cb43-11"><a href="#cb43-11" tabindex="-1"></a>    <span class="fu">autoplot</span>(<span class="at">type =</span> <span class="st">&quot;violin&quot;</span>)</span>
+<span id="cb43-12"><a href="#cb43-12" tabindex="-1"></a>) <span class="sc">+</span> </span>
+<span id="cb43-13"><a href="#cb43-13" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;R vs cppally sum by group - 10k groups&quot;</span>) <span class="sc">+</span></span>
+<span id="cb43-14"><a href="#cb43-14" tabindex="-1"></a>  bench<span class="sc">::</span><span class="fu">scale_x_bench_time</span>(<span class="at">base =</span> <span class="dv">2</span>)</span></code></pre></div>
+<p><img role="img" src="data:image/png;base64,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" /><!-- --></p>
+<div class="sourceCode" id="cb44"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb44-1"><a href="#cb44-1" tabindex="-1"></a></span>
+<span id="cb44-2"><a href="#cb44-2" tabindex="-1"></a><span class="co"># 1e05 groups</span></span>
+<span id="cb44-3"><a href="#cb44-3" tabindex="-1"></a>g <span class="ot">&lt;-</span> <span class="fu">as.character</span>(<span class="fu">sample.int</span>(<span class="dv">10</span><span class="sc">^</span><span class="dv">5</span>, n, <span class="at">replace =</span> <span class="cn">TRUE</span>))</span>
+<span id="cb44-4"><a href="#cb44-4" tabindex="-1"></a>(</span>
+<span id="cb44-5"><a href="#cb44-5" tabindex="-1"></a>  <span class="fu">mark</span>(</span>
+<span id="cb44-6"><a href="#cb44-6" tabindex="-1"></a>  <span class="at">base_grouped_sum =</span> <span class="fu">r_grouped_apply</span>(x, g, sum),</span>
+<span id="cb44-7"><a href="#cb44-7" tabindex="-1"></a>  <span class="at">cppally_grouped_r_sum =</span> <span class="fu">cpp_grouped_apply</span>(x, g, sum),</span>
+<span id="cb44-8"><a href="#cb44-8" tabindex="-1"></a>  <span class="at">cppally_grouped_cpp_sum =</span> <span class="fu">grouped_sum</span>(x, g),</span>
+<span id="cb44-9"><a href="#cb44-9" tabindex="-1"></a>  <span class="at">min_iterations =</span> <span class="dv">10</span></span>
+<span id="cb44-10"><a href="#cb44-10" tabindex="-1"></a>) <span class="sc">|&gt;</span> </span>
+<span id="cb44-11"><a href="#cb44-11" tabindex="-1"></a>    <span class="fu">autoplot</span>(<span class="at">type =</span> <span class="st">&quot;violin&quot;</span>)</span>
+<span id="cb44-12"><a href="#cb44-12" tabindex="-1"></a>) <span class="sc">+</span> </span>
+<span id="cb44-13"><a href="#cb44-13" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;R vs cppally sum by group - 100k groups&quot;</span>) <span class="sc">+</span></span>
+<span id="cb44-14"><a href="#cb44-14" tabindex="-1"></a>  bench<span class="sc">::</span><span class="fu">scale_x_bench_time</span>(<span class="at">base =</span> <span class="dv">2</span>)</span></code></pre></div>
+<p><img role="img" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASAAAAEgCAMAAAAjXV6yAAACH1BMVEUAAAAAADoAAGYAOjoAOmYAOpAAZrYzMzM6AAA6ADo6OgA6Ojo6OmY6ZmY6ZpA6ZrY6kLY6kNtNTU1NTVNNTV5NTWNNTWRNTWlNTW5NTYNNTY5NU39NWU1NY25NaX9NaatNbo5NbqtNechNg45Ng8hNjqJNjqtNjshTTU1ZTU1ZTVlZTWlZTW9ZjuReTU1eTW5eTW9eTY5eU15kTW5kTY5mAABmOgBmZmZmZrZmkJBmkNtmtrZmtttmtv9pTU1uTU1uTVNuTW5uTW9uTXluTY5uY25uY45uaX9ubo5ubqtujoNujshuq6tuq7Vuq+Rutf9veU15TW5/Xll/aU1/aW5/aY5/jm9/zf+DTVODyP+OTU2OTV6OTWSOTWmOTW6OTY6Obk2Obm6ObquOg02Ojk2Ojm6Ojo6Ooo6OyP+O5P+QOgCQZgCQZjqQZmaQkLaQtpCQttuQ27aQ2/+dnW6d5P+ijk2i//+rY1mraV6rbk2rbmOrbmmrbm6rbo6rq26rq46rzaur5Mir5OSr5P+1jk22ZgC2Zjq2Zma2kDq2tpC2ttu229u22/+2///Ijk3Ijm7I5KvI/8jI/+TI///Nf1PNyI7bkDrbtmbbtpDb27bb29vb2//b/7bb///kq27kyI7k5Kvk/8jk/+Tk///r6+v/tW//tmb/yHn/yI7/25D/27b/29v/5I7/5J3/5Kv//7X//7b//8j//9v//+T////HhR5rAAAACXBIWXMAAA7DAAAOwwHHb6hkAAAMUklEQVR4nO2diWMbRxXG12ljKYU2RGlpCGcoJZzlqsLpmoA5wpECBQouOG2AIMydtoBJCqFCUCBxSQ0KR20Og5BDKixp/kDmzbGHvOsnyXtolO9LbI1mZ2c1P8+bmV3te+sJaFd5RX+ASRcAMQIgRgDECIAYARAjAGIEQIxcBdT0tF58OZXqesv71+ln5xbXAXn7rqRR3RQC0mB6v/IOpVHd1AIS29VD4Yzt6qzofcfzZj7gl7xW9m49rwq2BlNy422y7PsCQC1vLlwpVZVnq1KUAfTfhu1BW2Vqmmxgb1mZ3pwp2KI3M+dlo28vD6asoc75gAiw3GdG0ROqqvzblop2jEG9ZWpaY9+VrfLBdYlr1mbLxl6TFLer3ux67xlvNpTqLe+7LFRZ38QaVF/D2BpV5TigmYP+sNFUnWNWtuqW9/7OL7dVNj1su6paLQEEKfn7L7/5btkLASIb8y2MqnIWEDXvWvmOYFglFGoIaRC5Oy7bXGNr2ngIY5CSWxXmECDaaC1MV5Vfm1KVHoNaXjDxUPt0r/jTicD0dgUkje327/32+WoIEHWsRlCprCq3JqUrM0g3QrN8c+aHVTPyiD9/24zSAyYmR50rQUrTi4xBkvn7q+GVg+OAtqvBQnGr/G6i0vJesi56z/gTEVlSleYnmW8HaZOSaNbF9ROehqMB9ZZfdMBaGFXlOCA5WNtOQ5MyZZpp3ppJy0zk29VbytrygpQpGgEka/SZOz3Nm1bINsz5eRqWWigGs5tcKNKyUY48cnlIY3eQot7j3foDOeyEAPkrBOH0QnFkbfvjU5CKVSsgTgKgAV0/ET0jA6CBUt7A2S8ARSSHtIPRnJsG0LgCIEYAxAiAGAEQIwBi5CigfymZl8F0fHLEElYABEAABEA7BUCMAIgRADECIEYAxAiAGAEQIwBiBECMAIgRADECIEYAxAiAGAEQIwBiBECMAIgRADECIEYAxAiAGAEQIwBiBECMAIgRADHaO6ASCYASS5RKshZiBEAJgGxNuh8BUCIgQgRAuwIKCAFQPCCfUGaAOgtr8v+YO/dXaqPvlC4gOxABUBIgPaGV9giou1g5Uu+e+Zn8LcyL6MxXKjUDaFUmTm0GhV/zWL3z8UePrsnk0TUqQz92R52pij1qAanSJt2uhHbqX/x5pXJaZp3ODJCCtDdA9JduH/vH4rHNNjVavyzVDR35v31atP0WrMo3R+qd+ZpOHtu0gPSOlLlxXG+r+IDm/b7UPbNG2y2gFZmc12/N6mWvigcUo+EB6U/XXayJ/sW6eaF82RYNqHt289m6KUwNlNtpH0pKkD4gvf8S9cI1Vcw3sZCZ0naTo3pQXR3N5IrJNDFtPuozrtbMi/whU9CA+hd/cXYzVNgAop8gafdfrFSkqSkkqzGAyHaP1PMDlMYgbXrQUt32ANORfBMTG+d8C0vuQWbHM2t+sbgeRArsMmtA6Uzz1JDOwtXF4/TJu/pFNeBk3QCSKb+0GYNUD1FjEDVugwYvtaPJHBiDAkC0LdgpY0BpLRT1LLb0DTWL6RexUaFZyADqP7UWLvx63YPshCWLfkqOOmZHVRlRD89ioR6kTNfulC2gdE81zGcMPmpInU9G38YtjWJ3HF3pAUr7ZHUXQBs0qsp1EQ2/T69UVA9J2j8iu1M9ktxVKQEqhfHgXCwCqGSumOF6UFK26TsANGYJKwACIAACoJ0CIEYAxAiAGAEQIwBiBECMAIgRADECIEYAxAiAGAEQIwBiBECMAIgRADEqCJB5ikI6zxPKVMUA0g83cULFANquzu38KJOpYgD1lgFoV0Ci5cDoo1UMIAro7tQgnXTjQVaAHJLmA0CJKgqQempXKg8NzFgakCjFNy4zQOp5MNtVBwgVA8isg1yYywCIUTGAYGIcIAzSHCBnBECMCgAkR2jXTjXQg5IFQIw0n9wBaTNzwMJ8QPF+FpkBaszSUqjpwIVXA0jkC0h2ILos7cpKuhBAtIwGoCRAveVD9KDsBkwsaQzaokevN6LPGZ1MFQTIHQEQo4IAObcOChHCOiiiAFCcz3tWgBxcBwm/D2EdFFEY0A7fU3Mqmz4gB9dBpHhAuwcBHA/Q0Oug/AMqDSoCaEdgEr11N6fvMQENq8kCJAb7ilAdSHWtTAFlHnEq9ghGQ0SgCsJvlHyZdpb8OJJjXxCJB9T0vLmmMbHsI07FHcGiGyICVSQ+yQ75uck9YChF10H7n9czPSmviFM7jyCGi0AVjU+Sh4mpaX7OTvM5RJyKPYLZxkegyn+QHgCUU8Sp6BFCH4eLQFXANN8kE7NfPWcfcSruCAEcNgJV/gtFIVrhr54zjzgVewQLnI9Alf+pRpyyjzi12xES5QPK9WQ17jbgjCNODR5hlAhU+V/ucOxGcr3UyROQaLpwOVrJBzRm88cD5NjNC7gmvYsAiFFRgNQteC6M1AUBcusmzkK+m6cXh65J53z7i4OAxm3+eIAEXbJ3x8SKuNPes5r0TlQMIIdUDKDeX/Nv6ZgqBpAdfX494fYlCjOxlifPVrfKkz4AieLGoO3qzG2eA988FzdIb5WdcPYpDFDDm1VmNvEqBpA0MLVQxBiUBOg9+tWZWQx+84kqClD45oWJlm5F7oAiNy9MtPba/PEARb+bn2gBEKNiAEVvXphoFQQoevPCJKsoQM4IgBgBECMAYgRAjACIEQAxAiBGAMQIgBgBECMAYgRAjACIEQAxygyQ79lgBUCREoFbpxUARQH57mdWABQuUQIgBpDwPTytAChUohR4WPlHAqAwIFU3ACUljY+99ga2AqBBProL+UcCoACQrRyAYpOlUCQHAIoDFNQOQDkCWk0hGJCv4UMLARAjhwCdo4hLJvCSCYtkg1MYjRV7aYgAS44AUhFPTOAlExbJRlOyRcaIvTRMgKWUVYpNpmJi2swoflIQZcLEwxFjxl4aJsCSGz3o2XDgJRMWyURTMiXGir00TIAlNwDJJsm/uwm8RBkU9edMOAzMWLGXTE3TAOi4DRrYOVk3YZFsNCVbZIzYS8MEWHIE0LlQ4CUbFslEUzIaK/bSEAGW3AA0nMaMvZSsaQCUQuylZGUBCCerTBKXO7gkLphxgHDJlSmBi/YcIHztw5TAF4ccIHz1zJQAIA4Qbn9hSuAGqmFLWAEQAAEQAO0UADECIEYAxAiAGAEQIwBiBECMAIgRADECIEYAxAiAGAEQIwBiBECMAIgRADECoJEVf+t0wg3VI2QDEJMNQEw2ADHZUwMoKwEQIwBiBECMAIiRi4A21N34yq2jM298Gzsful+7dpj3/RW6Xb9tC1pfCOMZueHfz28yRHjfiFwERNLeRMobiFLGFzTwN5Op9rG/f/iz9Y17ThIo3XTlGSnfy62qwKbNEInet44Csh6JpzaVo9lq5c6337/Wv/A569ra/Yoi1iZnrSdrq4e/qDd84rhC+Zz2UvNdYd/qExZh91iV5ygg4xLr9yBlYtKspF5L9nTjLV+vHH6dKnnvUr2/cs/C77XPa/fM1aXH7yUnx89U7n5IucJ2H3kHZS8qawy5x2q/WTcB+Y5C3cWK9txTgH7ytnr/wufJC/bGGx9U3aszf/dDp2W3uLTwnPY3635VvpdG1Zn/SP2Fdz4hNz298mmZvXTppPJJC7mm6YO4Ccj6M9Lw0VamoQCpxn2tRl6fH3ugctdJ5a335noE0OIb9OB86pe1/33wYdH/6fxpNRApH9nVWth3T+W5CWjVONATKP2HHgDUPbsp/nPnE7KNNfKq9QFdIud0tddZDeiF+x60/VFmRwGpPCcBUQuUBnrQj1+92b/wBfIWbr/iy+LfL//jqx6oaddhA+iR+75JzrCvJBfZj65JEyNLIxjtY3+T//75VNj7U/vNOgnIdBq5tmlb70Tdgx6vVA4/LG686Vvk8/rSH4k/6BWTBnRp4eqX1Puja3LNc9d85WWP1fWC6F2XFp40C6NwD1p1eBbLTwDECIAYARAjAGIEQIymGND1y2LrwPm91jK9gFKAQwIgRlMLaKvseYckpK0D31cp+WtOiN6y5432CMepBaR6EAEq718XTXqAdXPfFfWI1NEeJHsTAJqj7jSnMtQDQOlJoMNr+gHRUGR/NT1v1Mdc3mSARn9M880FqDUz8sw2vYBoqBkE1FuWXWg0StMLSDS82UFAapofrRdNMaB0BECMAIgRADECIEYAxAiAGAEQIwBiBECM/g9L5ozKos//zwAAAABJRU5ErkJggg==" /><!-- --></p>
+<p>Passing R’s <code>sum()</code> performs similarly to
+<code>cppally::sum()</code> for small numbers of groups. Most of the
+time is spent grouping and moving data, which is shared by both, and
+calling a primitive like <code>sum()</code> from C++ adds little
+overhead per group.</p>
+</div>
+<div id="by-group-median" class="section level4">
+<h4>By-group median</h4>
+<p>Non-primitive R functions like <code>median()</code> are much more
+expensive to call, and that cost is paid once per group. cppally’s
+<code>quantile(prob = 0.5)</code> gives the same result as
+<code>median()</code>, so we can use it for the comparison.</p>
+<div class="sourceCode" id="cb45"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb45-1"><a href="#cb45-1" tabindex="-1"></a></span>
+<span id="cb45-2"><a href="#cb45-2" tabindex="-1"></a><span class="op">[[</span><span class="at">cppally</span><span class="op">::</span><span class="at">register</span><span class="op">]]</span></span>
+<span id="cb45-3"><a href="#cb45-3" tabindex="-1"></a>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> grouped_median<span class="op">(</span>r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> x<span class="op">,</span> r_vector<span class="op">&lt;</span>r_str<span class="op">&gt;</span> g<span class="op">){</span></span>
+<span id="cb45-4"><a href="#cb45-4" tabindex="-1"></a>  </span>
+<span id="cb45-5"><a href="#cb45-5" tabindex="-1"></a>    groups grps <span class="op">=</span> make_groups<span class="op">(</span>g<span class="op">);</span></span>
+<span id="cb45-6"><a href="#cb45-6" tabindex="-1"></a>  </span>
+<span id="cb45-7"><a href="#cb45-7" tabindex="-1"></a>    r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;</span> medians <span class="op">=</span> apply_by_group<span class="op">(</span></span>
+<span id="cb45-8"><a href="#cb45-8" tabindex="-1"></a>      x<span class="op">,</span> grps<span class="op">,</span></span>
+<span id="cb45-9"><a href="#cb45-9" tabindex="-1"></a>      <span class="op">[](</span><span class="at">const</span> r_vector<span class="op">&lt;</span>r_dbl<span class="op">&gt;&amp;</span> chunk<span class="op">){</span></span>
+<span id="cb45-10"><a href="#cb45-10" tabindex="-1"></a>          <span class="cf">return</span> quantile<span class="op">(</span>chunk<span class="op">,</span> <span class="fl">0.5</span><span class="op">,</span> <span class="co">/*na_rm = */</span> <span class="kw">true</span><span class="op">);</span></span>
+<span id="cb45-11"><a href="#cb45-11" tabindex="-1"></a>      <span class="op">});</span></span>
+<span id="cb45-12"><a href="#cb45-12" tabindex="-1"></a></span>
+<span id="cb45-13"><a href="#cb45-13" tabindex="-1"></a>      <span class="cf">return</span> add_group_names<span class="op">(</span>medians<span class="op">,</span> g<span class="op">,</span> grps<span class="op">);</span></span>
+<span id="cb45-14"><a href="#cb45-14" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb46"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb46-1"><a href="#cb46-1" tabindex="-1"></a><span class="co"># 1e04 groups</span></span>
+<span id="cb46-2"><a href="#cb46-2" tabindex="-1"></a>g <span class="ot">&lt;-</span> <span class="fu">as.character</span>(<span class="fu">sample.int</span>(<span class="dv">10</span><span class="sc">^</span><span class="dv">4</span>, n, <span class="at">replace =</span> <span class="cn">TRUE</span>))</span>
+<span id="cb46-3"><a href="#cb46-3" tabindex="-1"></a>(</span>
+<span id="cb46-4"><a href="#cb46-4" tabindex="-1"></a>  <span class="fu">mark</span>(</span>
+<span id="cb46-5"><a href="#cb46-5" tabindex="-1"></a>  <span class="at">base_grouped_median =</span> <span class="fu">r_grouped_apply</span>(x, g, median),</span>
+<span id="cb46-6"><a href="#cb46-6" tabindex="-1"></a>  <span class="at">cppally_grouped_r_median =</span> <span class="fu">cpp_grouped_apply</span>(x, g, median),</span>
+<span id="cb46-7"><a href="#cb46-7" tabindex="-1"></a>  <span class="at">cppally_grouped_cpp_median =</span> <span class="fu">grouped_median</span>(x, g),</span>
+<span id="cb46-8"><a href="#cb46-8" tabindex="-1"></a>  <span class="at">min_iterations =</span> <span class="dv">3</span></span>
+<span id="cb46-9"><a href="#cb46-9" tabindex="-1"></a>) <span class="sc">|&gt;</span> </span>
+<span id="cb46-10"><a href="#cb46-10" tabindex="-1"></a>    <span class="fu">autoplot</span>(<span class="at">type =</span> <span class="st">&quot;violin&quot;</span>)</span>
+<span id="cb46-11"><a href="#cb46-11" tabindex="-1"></a>) <span class="sc">+</span> </span>
+<span id="cb46-12"><a href="#cb46-12" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;R vs cppally median by group - 10k groups&quot;</span>) <span class="sc">+</span></span>
+<span id="cb46-13"><a href="#cb46-13" tabindex="-1"></a>  bench<span class="sc">::</span><span class="fu">scale_x_bench_time</span>(<span class="at">base =</span> <span class="dv">2</span>)</span>
+<span id="cb46-14"><a href="#cb46-14" tabindex="-1"></a><span class="co">#&gt; Warning: Some expressions had a GC in every iteration; so filtering is</span></span>
+<span id="cb46-15"><a href="#cb46-15" tabindex="-1"></a><span class="co">#&gt; disabled.</span></span></code></pre></div>
+<p><img role="img" src="data:image/png;base64,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" /><!-- --></p>
+<p>As we move from simpler functions like <code>sum()</code> to more
+complex ones like <code>median()</code>, we see that the calculation
+over many groups starts to become quite slow with R functions. There is
+a large difference between <code>cppally_grouped_r_median</code> and
+<code>cppally_grouped_cpp_median</code>, indicating that most of the
+time difference is spent in calling <code>stats::median()</code>
+itself.</p>
+<p>Passing efficient C++ functions is hence more suitable for function
+calls on many groups.</p>
+</div>
+</div>
+<div class="footnotes footnotes-end-of-document">
+<hr />
+<ol>
+<li id="fn1"><p>Vectorising in the R sense, not the SIMD
+(single-instruction-multiple-data) sense. In R, vectorising literally
+means taking a fully or partially scalar-based function and expanding
+the domain of the scalar inputs (or outputs) into the vector domain.<a href="#fnref1" class="footnote-back">↩︎</a></p></li>
+</ol>
 </div>
 
 

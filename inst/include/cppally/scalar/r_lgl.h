@@ -1,0 +1,140 @@
+#ifndef CPPALLY_R_LGL_H
+#define CPPALLY_R_LGL_H
+
+#include <cppally/r_setup.h>
+#include <cppally/r_concepts.h>
+#include <cppally/r_sexp/protect.h>
+#include <cppally/scalar/r_int.h>
+
+namespace cppally {
+
+// R bool type with 3 states, similar to Rboolean.
+// Can only implicitly convert to bool in if statements.
+// If during implicit conversion to bool, an NA is detected, an error is thrown.
+// It can implicitly coerce to int.
+struct r_lgl {
+  int value;
+  using value_type = int;
+  constexpr r_lgl() noexcept : value{0} {}
+  // explicit constexpr r_lgl(int x) noexcept : value{(static_cast<unsigned int>(x) * 2u) != 0u ? 1 : x} {} // Has trouble vectorising on GCC
+  template <typename T> requires (is<T, int>)
+  explicit constexpr r_lgl(T x) noexcept : value(r_int(x).is_na() ? x : static_cast<int>(static_cast<bool>(x))){}
+  template <typename T> requires (is<T, bool>)
+  explicit constexpr r_lgl(T x) noexcept : value{static_cast<int>(x)} {}
+  template <typename U> requires (is<U, int>)
+  constexpr operator U() const noexcept { return value; }
+
+  static constexpr r_lgl na() noexcept {
+    constexpr int na_int = r_int::na().value;
+    r_lgl out;
+    out.value = na_int;
+    return out;
+  }
+
+  constexpr bool is_true() const noexcept {
+    return value == 1;
+  }
+  constexpr bool is_false() const noexcept {
+    return value == 0;
+  }
+  constexpr bool is_na() const noexcept {
+    return value == na().value;
+  }
+
+  explicit operator bool() const {
+    if (is_na()) [[unlikely]] {
+        abort("Cannot implicitly convert r_lgl NA to bool, please check");
+    }
+    return static_cast<bool>(value);
+  }
+};
+
+// The 3 possible values of r_lgl
+inline constexpr r_lgl r_true{1};
+inline constexpr r_lgl r_false{0};
+inline constexpr r_lgl r_na = r_lgl::na();
+
+namespace internal {
+
+// Internal fast r_lgl constructor for pre-normalised input
+inline constexpr r_lgl new_r_lgl(int x) noexcept {
+  r_lgl out;
+  out.value = x;
+  return out;
+}
+
+}
+
+// Logical operators
+
+inline constexpr r_lgl operator!(r_lgl x) noexcept {
+  return x.is_na() ? r_lgl::na() : r_lgl(x.is_false());
+}
+
+// r_true = 1, r_false = 0, r_na = INT_MIN
+
+// ---------------------------------------------------------
+// OPTIMIZED OR (||) for r_lgl
+// If either is 1, return 1.
+// Otherwise return (a|b).
+// ---------------------------------------------------------
+inline constexpr r_lgl operator||(r_lgl lhs, r_lgl rhs) noexcept {
+  int o = lhs.value | rhs.value;
+  // o << 31 moves the TRUE bit onto the NA bit, clearing NA when TRUE is present
+  return internal::new_r_lgl(o & ~(o << 31));
+}
+
+inline constexpr r_lgl operator||(r_lgl lhs, bool rhs) noexcept {
+  return lhs || r_lgl(rhs);
+}
+
+inline constexpr r_lgl operator||(bool lhs, r_lgl rhs) noexcept {
+  return r_lgl(lhs) || rhs;
+}
+
+// ---------------------------------------------------------
+// OPTIMIZED AND (&&) for r_lgl
+// If either is 0, return 0.
+// Otherwise if either is NA, return NA.
+// Otherwise return 1.
+// ---------------------------------------------------------
+
+inline constexpr r_lgl operator&&(r_lgl lhs, r_lgl rhs) noexcept {
+  int a = lhs.value;
+  int b = rhs.value;
+  int o = a | b;
+  // (a & b) misses only TRUE && NA; o & (o << 31) is NA exactly in that case
+  int res = (a & b) | (o & (o << 31));
+  return internal::new_r_lgl(res);
+}
+
+inline constexpr r_lgl operator&&(r_lgl lhs, bool rhs) noexcept {
+  return lhs && r_lgl(rhs);
+}
+
+inline constexpr r_lgl operator&&(bool lhs, r_lgl rhs) noexcept {
+  return r_lgl(lhs) && rhs;
+}
+
+inline constexpr r_lgl operator|(r_lgl lhs, r_lgl rhs) noexcept {
+  return lhs || rhs;
+}
+inline constexpr r_lgl operator|(r_lgl lhs, bool rhs) noexcept {
+  return lhs | r_lgl(rhs);
+}
+inline constexpr r_lgl operator|(bool lhs, r_lgl rhs) noexcept {
+  return r_lgl(lhs) | rhs;
+}
+inline constexpr r_lgl operator&(r_lgl lhs, r_lgl rhs) noexcept {
+  return lhs && rhs;
+}
+inline constexpr r_lgl operator&(r_lgl lhs, bool rhs) noexcept {
+  return lhs & r_lgl(rhs);
+}
+inline constexpr r_lgl operator&(bool lhs, r_lgl rhs) noexcept {
+  return r_lgl(lhs) & rhs;
+}
+
+}
+
+#endif
