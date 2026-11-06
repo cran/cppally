@@ -1,3 +1,8 @@
+# cppally 1.2.1
+
+- Fix CRAN check result vignette error related to a GC issue in 
+`bench:::autoplot.bench_mark` + `tidyr:::unnest.data.frame`.
+
 # cppally 1.2.0 (2026-11-05)
 
 ## Breaking changes

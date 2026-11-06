@@ -1,6 +1,6 @@
 Package: cppally
 Title: A 'C++20' API for R
-Version: 1.2.0
+Version: 1.2.1
 Authors@R: c(
     person("Nick", "Christofides", , "nick.christofides.r@gmail.com", role = c("aut", "cre", "cph"),
            comment = c(ORCID = "0000-0002-9743-7342")),
@@ -34,10 +34,10 @@ Config/Needs/cppally/cpp_register: brio, cli, decor, desc, glue, purrr,
 Config/testthat/edition: 3
 Encoding: UTF-8
 SystemRequirements: C++20
-Config/roxygen2/version: 8.0.0
+Config/roxygen2/version: 8.1.1
 Config/Needs/website: rmarkdown
 NeedsCompilation: no
-Packaged: 2026-11-05 13:00:10 UTC; Nmc5
+Packaged: 2026-11-06 06:00:12 UTC; Nmc5
 Author: Nick Christofides [aut, cre, cph] (ORCID:
     <https://orcid.org/0000-0002-9743-7342>),
   Martin Leitner-Ankerl [cph] (Author of bundled ankerl::unordered_dense
@@ -48,4 +48,4 @@ Author: Nick Christofides [aut, cre, cph] (ORCID:
   Posit Software, PBC [cph] (SEXP protection mechanism in r_sexp.h
     inspired by cpp11)
 Repository: CRAN
-Date/Publication: 2026-11-05 14:40:02 UTC
+Date/Publication: 2026-11-06 09:50:08 UTC

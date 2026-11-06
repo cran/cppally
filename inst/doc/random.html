@@ -476,10 +476,10 @@ the same integers everywhere.</p>
 <span id="cb16-5"><a href="#cb16-5" tabindex="-1"></a>  <span class="at">check =</span> <span class="cn">FALSE</span></span>
 <span id="cb16-6"><a href="#cb16-6" tabindex="-1"></a>)</span>
 <span id="cb16-7"><a href="#cb16-7" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
-<span id="cb16-8"><a href="#cb16-8" tabindex="-1"></a><span class="co">#&gt;   expression                            min  median `itr/sec` mem_alloc `gc/sec`</span></span>
-<span id="cb16-9"><a href="#cb16-9" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt;                        &lt;bch:t&gt; &lt;bch:t&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
-<span id="cb16-10"><a href="#cb16-10" tabindex="-1"></a><span class="co">#&gt; 1 cppally_sample_int_with_replacem…   211µs 416.7µs    2350.      391KB     24.9</span></span>
-<span id="cb16-11"><a href="#cb16-11" tabindex="-1"></a><span class="co">#&gt; 2 base_sample_int_with_replacement   11.8ms  18.6ms      55.6     391KB      0</span></span></code></pre></div>
+<span id="cb16-8"><a href="#cb16-8" tabindex="-1"></a><span class="co">#&gt;   expression                           min   median `itr/sec` mem_alloc `gc/sec`</span></span>
+<span id="cb16-9"><a href="#cb16-9" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt;                        &lt;bch:&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
+<span id="cb16-10"><a href="#cb16-10" tabindex="-1"></a><span class="co">#&gt; 1 cppally_sample_int_with_replacem… 98.2µs 213.45µs     4117.     391KB    33.1 </span></span>
+<span id="cb16-11"><a href="#cb16-11" tabindex="-1"></a><span class="co">#&gt; 2 base_sample_int_with_replacement   3.8ms   3.96ms      246.     391KB     2.02</span></span></code></pre></div>
 <p>In this simple benchmark we achieve a large speed improvement over
 base R. The whole loop runs without re-entering R’s RNG once - only the
 <code>random_stream r;</code> line does that.</p>
@@ -648,13 +648,11 @@ sample-with-replacement.</p>
 <span id="cb25-19"><a href="#cb25-19" tabindex="-1"></a>  <span class="at">base_r  =</span> <span class="fu">boot_mean_r</span>(x, <span class="dv">2000</span>),</span>
 <span id="cb25-20"><a href="#cb25-20" tabindex="-1"></a>  <span class="at">check =</span> <span class="cn">FALSE</span></span>
 <span id="cb25-21"><a href="#cb25-21" tabindex="-1"></a>)</span>
-<span id="cb25-22"><a href="#cb25-22" tabindex="-1"></a><span class="co">#&gt; Warning: Some expressions had a GC in every iteration; so filtering is</span></span>
-<span id="cb25-23"><a href="#cb25-23" tabindex="-1"></a><span class="co">#&gt; disabled.</span></span>
-<span id="cb25-24"><a href="#cb25-24" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
-<span id="cb25-25"><a href="#cb25-25" tabindex="-1"></a><span class="co">#&gt;   expression      min   median `itr/sec` mem_alloc `gc/sec`</span></span>
-<span id="cb25-26"><a href="#cb25-26" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt; &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
-<span id="cb25-27"><a href="#cb25-27" tabindex="-1"></a><span class="co">#&gt; 1 cppally      61.4ms     66ms     14.4     15.4MB     5.38</span></span>
-<span id="cb25-28"><a href="#cb25-28" tabindex="-1"></a><span class="co">#&gt; 2 base_r      357.8ms    377ms      2.65    23.1MB     2.65</span></span></code></pre></div>
+<span id="cb25-22"><a href="#cb25-22" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
+<span id="cb25-23"><a href="#cb25-23" tabindex="-1"></a><span class="co">#&gt;   expression      min   median `itr/sec` mem_alloc `gc/sec`</span></span>
+<span id="cb25-24"><a href="#cb25-24" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt; &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
+<span id="cb25-25"><a href="#cb25-25" tabindex="-1"></a><span class="co">#&gt; 1 cppally      23.9ms   29.2ms     33.9     15.4MB    20.3 </span></span>
+<span id="cb25-26"><a href="#cb25-26" tabindex="-1"></a><span class="co">#&gt; 2 base_r      203.7ms  215.7ms      4.64    23.1MB     2.32</span></span></code></pre></div>
 <p>The hand-tuned bootstrap mean naturally is faster.</p>
 <div class="sourceCode" id="cb26"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb26-1"><a href="#cb26-1" tabindex="-1"></a><span class="fu">mark</span>(</span>
 <span id="cb26-2"><a href="#cb26-2" tabindex="-1"></a>  <span class="fu">boot_mean_cppally</span>(x, <span class="dv">2000</span>),</span>
@@ -664,8 +662,8 @@ sample-with-replacement.</p>
 <span id="cb26-6"><a href="#cb26-6" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
 <span id="cb26-7"><a href="#cb26-7" tabindex="-1"></a><span class="co">#&gt;   expression                      min   median `itr/sec` mem_alloc `gc/sec`</span></span>
 <span id="cb26-8"><a href="#cb26-8" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt;                 &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
-<span id="cb26-9"><a href="#cb26-9" tabindex="-1"></a><span class="co">#&gt; 1 boot_mean_cppally(x, 2000)  52.42ms  63.44ms      16.1    15.4MB     9.69</span></span>
-<span id="cb26-10"><a href="#cb26-10" tabindex="-1"></a><span class="co">#&gt; 2 boot_mean(x, 2000)           7.26ms   8.15ms     123.     21.8KB     0</span></span></code></pre></div>
+<span id="cb26-9"><a href="#cb26-9" tabindex="-1"></a><span class="co">#&gt; 1 boot_mean_cppally(x, 2000)  21.64ms  42.61ms      25.7    15.4MB     11.4</span></span>
+<span id="cb26-10"><a href="#cb26-10" tabindex="-1"></a><span class="co">#&gt; 2 boot_mean(x, 2000)           2.05ms   4.34ms     226.     21.8KB      0</span></span></code></pre></div>
 </div>
 <div id="a-flexible-and-fast-bootstrapper" class="section level3">
 <h3>A flexible and fast bootstrapper</h3>
@@ -752,8 +750,8 @@ version.</p>
 <span id="cb29-6"><a href="#cb29-6" tabindex="-1"></a><span class="co">#&gt; # A tibble: 2 × 6</span></span>
 <span id="cb29-7"><a href="#cb29-7" tabindex="-1"></a><span class="co">#&gt;   expression               min   median `itr/sec` mem_alloc `gc/sec`</span></span>
 <span id="cb29-8"><a href="#cb29-8" tabindex="-1"></a><span class="co">#&gt;   &lt;bch:expr&gt;          &lt;bch:tm&gt; &lt;bch:tm&gt;     &lt;dbl&gt; &lt;bch:byt&gt;    &lt;dbl&gt;</span></span>
-<span id="cb29-9"><a href="#cb29-9" tabindex="-1"></a><span class="co">#&gt; 1 boot_mean(x, 2000)    4.42ms   7.66ms      135.    15.7KB        0</span></span>
-<span id="cb29-10"><a href="#cb29-10" tabindex="-1"></a><span class="co">#&gt; 2 boot_mean2(x, 2000)   5.25ms   8.82ms      112.    23.5KB        0</span></span></code></pre></div>
+<span id="cb29-9"><a href="#cb29-9" tabindex="-1"></a><span class="co">#&gt; 1 boot_mean(x, 2000)    2.06ms   3.87ms      243.    15.7KB        0</span></span>
+<span id="cb29-10"><a href="#cb29-10" tabindex="-1"></a><span class="co">#&gt; 2 boot_mean2(x, 2000)   2.44ms   5.25ms      186.    23.5KB        0</span></span></code></pre></div>
 <p>Almost as fast as the hand-tuned version, which is a nice result
 given that <code>boot_mean2</code> was written using a functional.</p>
 <p>One benefit of a generic bootstrap functional like
